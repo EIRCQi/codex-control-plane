@@ -8,7 +8,9 @@ A local-first control plane for running Codex against real Git repositories with
 2. Codex analyzes it in `read-only` sandbox mode.
 3. The run pauses and displays the analysis.
 4. A person approves or rejects write access.
-5. Only after approval, Codex continues in `workspace-write` mode.
+5. Only after approval, Codex continues in `workspace-write` mode inside an isolated Git worktree.
+6. The app shows the resulting diff and asks for a second approval.
+7. Apply the patch to the original working tree or discard the isolated worktree completely.
 
 ## Requirements
 
@@ -35,7 +37,9 @@ npm test
 - Repository paths must be absolute and contain a `.git` entry.
 - Analysis always starts with `--sandbox read-only`.
 - Implementation cannot begin until an explicit approval transition.
-- Approved implementation uses `--sandbox workspace-write`.
+- Approved implementation uses `--sandbox workspace-write` in a temporary Git worktree.
+- The original working tree must be clean and remains untouched during implementation.
+- Applying the final diff requires a separate explicit approval.
 - Runs and approval events remain on the local machine under `.codex-control-plane/`.
 
 This is an early MVP. Run it only on repositories you trust and inspect the proposed plan before approving writes.
