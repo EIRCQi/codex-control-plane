@@ -6,10 +6,12 @@ const statusLabel = {
   queued: "Queued",
   running: "Running",
   awaiting_approval: "Approval required",
+  awaiting_merge: "Review changes",
   approved: "Approved",
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
+  discarded: "Discarded",
 };
 
 const escapeHtml = (value = "") => value.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -25,6 +27,12 @@ function runCard(run) {
       <div><strong>Write access requested</strong><p>Review the analysis before allowing workspace changes.</p></div>
       <div><button class="secondary reject" data-id="${run.id}">Reject</button><button class="primary approve" data-id="${run.id}">Approve & run</button></div>
     </div>` : "";
+  const mergeApproval = run.state === "awaiting_merge" ? `
+    <div class="diff-review">
+      <div class="diff-title"><div><strong>Changes are isolated</strong><p>${escapeHtml(run.diffStat || "Review the patch before applying it.")}</p></div><span>Original repo untouched</span></div>
+      <pre class="diff">${escapeHtml(run.diff)}</pre>
+      <div class="review-actions"><button class="secondary discard" data-id="${run.id}">Discard changes</button><button class="primary apply" data-id="${run.id}">Apply to repository</button></div>
+    </div>` : "";
   return `<article class="run-card">
     <div class="run-head"><div><span class="status ${run.state}">${statusLabel[run.state]}</span><h3>${escapeHtml(run.prompt)}</h3></div><time>${new Date(run.createdAt).toLocaleString()}</time></div>
     <p class="repo">⌘ ${escapeHtml(run.repository)}</p>
@@ -33,6 +41,7 @@ function runCard(run) {
     ${run.output ? `<details ${run.state === "awaiting_approval" ? "open" : ""}><summary>Agent output</summary><pre>${escapeHtml(run.output)}</pre></details>` : ""}
     ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}
     ${approval}
+    ${mergeApproval}
   </article>`;
 }
 
@@ -41,13 +50,15 @@ async function refresh() {
   emptyEl.hidden = runs.length > 0;
   runsEl.innerHTML = runs.map(runCard).join("");
   const active = runs.filter((run) => ["queued", "running", "approved"].includes(run.state)).length;
-  const approval = runs.filter((run) => run.state === "awaiting_approval").length;
+  const approval = runs.filter((run) => ["awaiting_approval", "awaiting_merge"].includes(run.state)).length;
   document.querySelector("#active-runs").textContent = active;
   document.querySelector("#needs-approval").textContent = approval;
   document.querySelector("#approval-count").textContent = approval;
   document.querySelector("#completed-runs").textContent = runs.filter((run) => run.state === "completed").length;
   document.querySelectorAll(".approve").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "approve")));
   document.querySelectorAll(".reject").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "reject")));
+  document.querySelectorAll(".apply").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "apply")));
+  document.querySelectorAll(".discard").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "discard")));
 }
 
 document.querySelector("#new-task").addEventListener("click", () => dialog.showModal());
