@@ -1,0 +1,19 @@
+{
+  "name": "Codex Control Plane",
+  "short_name": "Codex Control",
+  "description": "A local-first control plane for visible, controlled and recoverable Codex runs.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090d12",
+  "theme_color": "#10161e",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
