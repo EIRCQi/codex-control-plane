@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyRun, approveRun, createRun, discardRun, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "../lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "../lib/workflow.mjs";
 
 test("a run cannot write before approval", () => {
   const run = createRun({ id: "1", repository: "/tmp/repo", prompt: "Fix tests" });
@@ -43,4 +43,16 @@ test("isolated changes can be discarded", () => {
   requestMergeApproval(run, { diff: "+change", diffStat: "1 file changed" });
   discardRun(run);
   assert.equal(run.state, "discarded");
+});
+
+test("an active run can be cancelled and retried", () => {
+  const run = createRun({ id: "1", repository: "/tmp/repo", prompt: "Fix tests" });
+  transition(run, "running", "Analysis started");
+  cancelRun(run);
+  assert.equal(run.state, "cancelled");
+  assert.equal(run.cancelRequested, true);
+  prepareRetry(run);
+  assert.equal(run.state, "queued");
+  assert.equal(run.retries, 1);
+  assert.equal(run.cancelRequested, false);
 });
