@@ -27,3 +27,10 @@ test("tag builds publish checksummed and attested releases", async () => {
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /gh release upload/);
 });
+
+test("icon generator passes filesystem paths to sharp", async () => {
+  const generator = await readFile(new URL("../scripts/generate-icon.mjs", import.meta.url), "utf8");
+  assert.match(generator, /fileURLToPath\(new URL/);
+  assert.match(generator, /toFile\(output\)/);
+  assert.doesNotMatch(generator, /path\.dirname\(output\.pathname\)/);
+});
