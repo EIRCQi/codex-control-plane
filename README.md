@@ -30,6 +30,10 @@ Register trusted local Git repositories once, then choose them by name when star
 
 Search runs by task text or repository and filter by state, project or archive status. The run detail view combines workflow events, Codex JSON events, token/runtime usage and the generated diff. Finished runs can be archived or restored. Deleting a finished history record removes only local control-plane metadata and any remaining isolated worktree; it never deletes the registered repository.
 
+## Notifications
+
+The notification center keeps the latest 50 approval and run-result alerts in the browser, with unread counts and direct links to run details. Optional desktop alerts cover write approvals, diff reviews, successful completion, failures, cancellations and budget stops. Notification preferences and history stay in browser-local storage; permission is requested only after clicking **Enable desktop alerts**.
+
 ## Requirements
 
 - Node.js 20+
