@@ -7,23 +7,32 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
 import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
+import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 const dataDir = path.join(root, ".codex-control-plane");
 const dataFile = path.join(dataDir, "runs.json");
 const settingsFile = path.join(dataDir, "settings.json");
+const projectsFile = path.join(dataDir, "projects.json");
+const templatesFile = path.join(dataDir, "templates.json");
 const port = Number(process.env.PORT || 4310);
 const worktreeRoot = path.join(os.tmpdir(), "codex-control-plane-worktrees");
 const runs = new Map();
 const processes = new Map();
 const eventClients = new Set();
+const projects = new Map();
+let customTemplates = [];
 const defaultSettings = { maxConcurrentRuns: 2, maxTokensPerRun: 200000, maxTokensPerRepository: 1000000 };
 let settings = { ...defaultSettings };
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(worktreeRoot, { recursive: true });
 try { settings = { ...defaultSettings, ...JSON.parse(await readFile(settingsFile, "utf8")) }; } catch {}
+try {
+  for (const project of JSON.parse(await readFile(projectsFile, "utf8"))) projects.set(project.id, project);
+} catch {}
+try { customTemplates = JSON.parse(await readFile(templatesFile, "utf8")); } catch {}
 try {
   const saved = JSON.parse(await readFile(dataFile, "utf8"));
   for (const run of saved) {
@@ -59,6 +68,16 @@ async function persistSettings() {
   await writeFile(settingsFile, JSON.stringify(settings, null, 2));
 }
 
+async function persistProjects() {
+  await writeFile(projectsFile, JSON.stringify([...projects.values()], null, 2));
+}
+
+async function persistTemplates() {
+  await writeFile(templatesFile, JSON.stringify(customTemplates, null, 2));
+}
+
+const allTemplates = () => [...builtInTemplates, ...customTemplates];
+
 function repositoryTokens(repository) {
   return [...runs.values()].filter((run) => run.repository === repository).reduce((sum, run) => sum + (run.usage?.totalTokens || 0), 0);
 }
@@ -77,10 +96,18 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
   res.end(type.startsWith("application/json") ? JSON.stringify(body) : body);
 }
 
-async function validateRepository(input) {
+async function inspectRepository(input) {
   if (!input || !path.isAbsolute(input)) throw new Error("Repository must be an absolute path");
   const resolved = await realpath(input);
   await access(path.join(resolved, ".git"));
+  const branch = (await git(resolved, ["branch", "--show-current"])).trim() || "detached";
+  let remote = null;
+  try { remote = (await git(resolved, ["remote", "get-url", "origin"])).trim() || null; } catch {}
+  return { resolved, branch, remote };
+}
+
+async function validateRepository(input) {
+  const { resolved } = await inspectRepository(input);
   const status = await git(resolved, ["status", "--porcelain"]);
   if (status.trim()) throw new Error("Repository must be clean before starting an isolated run");
   return resolved;
@@ -305,16 +332,63 @@ async function api(req, res, url) {
     drainQueue();
     return send(res, 200, settings);
   }
+  if (req.method === "GET" && url.pathname === "/api/projects") {
+    return send(res, 200, [...projects.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/projects") {
+    const body = await jsonBody(req);
+    if (!body.name?.trim()) throw new Error("Project name is required");
+    const info = await inspectRepository(body.repository);
+    if ([...projects.values()].some((project) => project.repository === info.resolved)) throw new Error("This repository is already registered");
+    const project = createProject({ name: body.name, repository: info.resolved, branch: info.branch, remote: info.remote });
+    projects.set(project.id, project);
+    await persistProjects();
+    return send(res, 201, project);
+  }
+  const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (req.method === "DELETE" && projectMatch) {
+    if (!projects.delete(projectMatch[1])) return send(res, 404, { error: "Project not found" });
+    await persistProjects();
+    return send(res, 200, { deleted: true });
+  }
+  if (req.method === "GET" && url.pathname === "/api/templates") {
+    return send(res, 200, allTemplates());
+  }
+  if (req.method === "POST" && url.pathname === "/api/templates") {
+    const body = await jsonBody(req);
+    if (!body.name?.trim() || !body.prompt?.trim()) throw new Error("Template name and prompt are required");
+    const template = createTemplate(body);
+    customTemplates.push(template);
+    await persistTemplates();
+    return send(res, 201, template);
+  }
+  const templateMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
+  if (req.method === "DELETE" && templateMatch) {
+    const index = customTemplates.findIndex((template) => template.id === templateMatch[1]);
+    if (index < 0) return send(res, 404, { error: "Custom template not found" });
+    customTemplates.splice(index, 1);
+    await persistTemplates();
+    return send(res, 200, { deleted: true });
+  }
   if (req.method === "POST" && url.pathname === "/api/runs") {
     const body = await jsonBody(req);
-    const repository = await validateRepository(body.repository);
+    const project = body.projectId ? projects.get(body.projectId) : null;
+    if (body.projectId && !project) throw new Error("Project not found");
+    const repository = await validateRepository(project?.repository || body.repository);
     if (!body.prompt?.trim()) throw new Error("Task description is required");
+    const template = body.templateId ? allTemplates().find((item) => item.id === body.templateId) : null;
+    if (body.templateId && !template) throw new Error("Template not found");
+    const prompt = renderTemplate(template, body.prompt);
     const used = repositoryTokens(repository);
     if (settings.maxTokensPerRepository > 0 && used >= settings.maxTokensPerRepository) {
       throw new Error(`Repository token quota reached (${used.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`);
     }
-    const run = createRun({ id: randomUUID(), repository, prompt: body.prompt.trim() });
+    const run = createRun({ id: randomUUID(), repository, prompt, projectId: project?.id, templateId: template?.id });
     runs.set(run.id, run);
+    if (project) {
+      project.lastUsedAt = new Date().toISOString();
+      await persistProjects();
+    }
     await persist(run);
     drainQueue();
     return send(res, 202, run);
