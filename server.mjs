@@ -5,7 +5,7 @@ import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition } from "./lib/workflow.mjs";
 import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 
@@ -43,6 +43,7 @@ try {
     run.usageSeen ||= [];
     run.cancelRequested = false;
     run.budgetExceeded ||= false;
+    run.archived ||= false;
     run.queuedAction ||= run.phase === "implementation" ? "implementation" : "analysis";
     run.starting = false;
     if (run.state === "running") {
@@ -312,6 +313,20 @@ async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/runs") {
     return send(res, 200, [...runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   }
+  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+  if (req.method === "GET" && runMatch) {
+    const run = runs.get(runMatch[1]);
+    return run ? send(res, 200, run) : send(res, 404, { error: "Run not found" });
+  }
+  if (req.method === "DELETE" && runMatch) {
+    const run = runs.get(runMatch[1]);
+    if (!run) return send(res, 404, { error: "Run not found" });
+    if (!terminalStates.has(run.state)) throw new Error("Only completed, failed, cancelled, discarded or budget-limited runs can be deleted");
+    await cleanupWorktree(run);
+    runs.delete(run.id);
+    await persist();
+    return send(res, 200, { deleted: true });
+  }
   if (req.method === "GET" && url.pathname === "/api/usage") {
     return send(res, 200, aggregateUsage([...runs.values()]));
   }
@@ -393,11 +408,16 @@ async function api(req, res, url) {
     drainQueue();
     return send(res, 202, run);
   }
-  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard|cancel|retry)$/);
+  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard|cancel|retry|archive|unarchive)$/);
   if (req.method === "POST" && match) {
     const run = runs.get(match[1]);
     if (!run) return send(res, 404, { error: "Run not found" });
-    if (match[2] === "cancel") {
+    if (match[2] === "archive" || match[2] === "unarchive") {
+      if (!terminalStates.has(run.state)) throw new Error("Only finished runs can be archived");
+      run.archived = match[2] === "archive";
+      run.updatedAt = new Date().toISOString();
+      run.events.push({ type: `run.${match[2]}`, message: run.archived ? "Run archived" : "Run restored", at: run.updatedAt });
+    } else if (match[2] === "cancel") {
       cancelRun(run);
       const child = processes.get(run.id);
       if (child) {
