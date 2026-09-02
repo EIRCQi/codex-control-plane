@@ -48,6 +48,8 @@ Run `npm run dist` to generate the 512px icon and build the installer for the cu
 
 The **Build desktop installers** GitHub Actions workflow can be started manually or by pushing a `v*` tag. It builds unsigned artifacts on native macOS, Windows and Linux runners and attaches them to the workflow run. Public distribution still requires platform-specific code-signing and, on macOS, notarization credentials.
 
+Tag builds additionally verify that the tag matches `package.json`, generate SHA-256 checksums and provenance attestations, and create or update a GitHub Release. See [`docs/RELEASING.md`](docs/RELEASING.md) for the release checklist and verification commands.
+
 ## Requirements
 
 - Node.js 20+
