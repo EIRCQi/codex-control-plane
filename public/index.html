@@ -22,7 +22,20 @@
     <main>
       <header>
         <div><p class="eyebrow">LOCAL WORKSPACE</p><h1>Mission Control</h1></div>
-        <button class="primary" id="new-task">＋ New task</button>
+        <div class="header-actions">
+          <button class="notification-button" id="notification-button" type="button" aria-label="Open notifications" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
+          <button class="primary" id="new-task">＋ New task</button>
+          <div class="notification-popover" id="notification-popover" hidden>
+            <div class="notification-head"><div><p class="eyebrow">ACTIVITY</p><h3>Notifications</h3></div><button class="text-button" id="mark-notifications-read" type="button">Mark all read</button></div>
+            <div id="notification-list" class="notification-list"><p class="notification-empty">No notifications yet.</p></div>
+            <div class="notification-settings">
+              <label><input id="notify-approvals" type="checkbox" /> Approval requests</label>
+              <label><input id="notify-results" type="checkbox" /> Completed & failed runs</label>
+              <button class="secondary" id="enable-system-notifications" type="button">Enable desktop alerts</button>
+              <small id="notification-permission-status"></small>
+            </div>
+          </div>
+        </div>
       </header>
       <section class="metrics">
         <article><span>Active runs</span><strong id="active-runs">0</strong><small>Right now</small></article>
