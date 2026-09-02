@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch server.mjs",
+    "desktop": "electron electron.mjs",
     "start": "node server.mjs",
     "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0"
   },
   "engines": {
     "node": ">=20"
