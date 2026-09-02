@@ -38,6 +38,10 @@ The notification center keeps the latest 50 approval and run-result alerts in th
 
 Browsers with PWA support can install the local dashboard into a standalone application window from the **Install app** button. A service worker caches only the static application shell; API responses, run history and the live SSE stream are deliberately never cached. The local Node runner must remain running for repository access and task execution.
 
+## Desktop runner and system tray
+
+Install development dependencies once with `npm install`, then start the native desktop shell with `npm run desktop`. Electron starts the same local control server, opens an isolated renderer window and adds a system tray menu. Closing the window hides it while the Runner and active Codex tasks continue; use **Quit** in the tray menu to stop the application. The tray can also reopen the window or launch the dashboard in the default browser.
+
 ## Requirements
 
 - Node.js 20+
