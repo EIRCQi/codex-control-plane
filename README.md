@@ -12,6 +12,8 @@ A local-first control plane for running Codex against real Git repositories with
 6. The app shows the resulting diff and asks for a second approval.
 7. Apply the patch to the original working tree or discard the isolated worktree completely.
 
+The dashboard streams Codex JSON events over Server-Sent Events. Active runs can be cancelled, and failed or cancelled phases can be retried without restarting the whole application.
+
 ## Requirements
 
 - Node.js 20+
@@ -41,5 +43,7 @@ npm test
 - The original working tree must be clean and remains untouched during implementation.
 - Applying the final diff requires a separate explicit approval.
 - Runs and approval events remain on the local machine under `.codex-control-plane/`.
+- Live event history is capped at the latest 500 events per run.
+- Cancellation first sends `SIGTERM`, then escalates to `SIGKILL` if the process does not exit.
 
 This is an early MVP. Run it only on repositories you trust and inspect the proposed plan before approving writes.
