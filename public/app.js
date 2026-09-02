@@ -326,11 +326,55 @@ form.addEventListener("submit", async (event) => {
   await refresh();
 });
 
+let installPrompt = null;
+const installButton = document.querySelector("#install-app");
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  installPrompt = event;
+  installButton.hidden = false;
+});
+installButton.addEventListener("click", async () => {
+  if (!installPrompt) return;
+  await installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  installButton.hidden = true;
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  installButton.hidden = true;
+});
+
+function connectionStatus(connected) {
+  const status = document.querySelector(".local-status");
+  status.classList.toggle("disconnected", !connected);
+  status.querySelector("small").textContent = connected ? "Connected" : "Reconnecting…";
+}
+
+function showUpdate(registration) {
+  if (!registration.waiting || document.querySelector(".update-toast")) return;
+  const toast = document.createElement("div");
+  toast.className = "update-toast";
+  toast.innerHTML = '<span>Control Plane update ready</span><button class="primary" type="button">Reload</button>';
+  toast.querySelector("button").addEventListener("click", () => {
+    registration.waiting.postMessage({ type: "skip-waiting" });
+    window.location.reload();
+  });
+  document.body.append(toast);
+}
+
+if ("serviceWorker" in navigator) {
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  showUpdate(registration);
+  registration.addEventListener("updatefound", () => registration.installing?.addEventListener("statechange", () => showUpdate(registration)));
+}
+
 await refresh();
 await loadSettings();
 await loadCatalog();
 renderNotifications();
 const events = new EventSource("/api/events");
+events.onopen = () => connectionStatus(true);
 events.addEventListener("run", (event) => {
   const changed = JSON.parse(event.data);
   const previous = currentRuns.find((run) => run.id === changed.id);
@@ -340,4 +384,7 @@ events.addEventListener("run", (event) => {
   render(next);
   addNotification(notificationForTransition(previous, changed));
 });
-events.onerror = () => setTimeout(refresh, 2000);
+events.onerror = () => {
+  connectionStatus(false);
+  setTimeout(() => void refresh().catch(() => {}), 2000);
+};
