@@ -26,6 +26,10 @@ The local settings panel controls maximum concurrent Codex phases, tokens per ru
 
 Register trusted local Git repositories once, then choose them by name when starting a task. Registration stores only the absolute path, current branch, optional origin URL and last-used time; removing a project never deletes repository files. Three built-in templates cover feature implementation, diagnosis/fixes and code review. Custom templates must include a `{{task}}` placeholder and remain local under `.codex-control-plane/`.
 
+## Run history
+
+Search runs by task text or repository and filter by state, project or archive status. The run detail view combines workflow events, Codex JSON events, token/runtime usage and the generated diff. Finished runs can be archived or restored. Deleting a finished history record removes only local control-plane metadata and any remaining isolated worktree; it never deletes the registered repository.
+
 ## Requirements
 
 - Node.js 20+
