@@ -32,6 +32,13 @@
       </section>
       <section class="panel">
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
+        <div class="run-filters">
+          <input id="run-search" type="search" placeholder="Search tasks or repositories…" />
+          <select id="state-filter"><option value="">All states</option><option value="active">Active</option><option value="awaiting_approval">Needs approval</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
+          <select id="project-filter"><option value="">All projects</option></select>
+          <label class="archive-toggle"><input id="show-archived" type="checkbox" /> Show archived</label>
+          <span id="filter-count"></span>
+        </div>
         <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p></div>
         <div id="runs" class="runs"></div>
       </section>
@@ -95,6 +102,12 @@
         <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary">Start analysis</button></div>
         <p id="form-error" class="error"></p>
       </form>
+    </dialog>
+    <dialog id="run-dialog" class="run-dialog">
+      <div class="detail-shell">
+        <div class="dialog-head"><div><p class="eyebrow">RUN DETAILS</p><h2 id="detail-title">Task</h2></div><button type="button" class="icon" id="close-run-dialog">×</button></div>
+        <div id="run-detail"></div>
+      </div>
     </dialog>
     <script type="module" src="/app.js"></script>
   </body>
