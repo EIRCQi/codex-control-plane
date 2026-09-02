@@ -5,7 +5,7 @@ import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, createRun, discardRun, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -14,16 +14,29 @@ const dataFile = path.join(dataDir, "runs.json");
 const port = Number(process.env.PORT || 4310);
 const worktreeRoot = path.join(os.tmpdir(), "codex-control-plane-worktrees");
 const runs = new Map();
+const processes = new Map();
+const eventClients = new Set();
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(worktreeRoot, { recursive: true });
 try {
   const saved = JSON.parse(await readFile(dataFile, "utf8"));
-  for (const run of saved) runs.set(run.id, run);
+  for (const run of saved) {
+    run.logs ||= [];
+    run.retries ||= 0;
+    run.cancelRequested = false;
+    runs.set(run.id, run);
+  }
 } catch {}
 
-async function persist() {
+function emitRun(run) {
+  const payload = `event: run\ndata: ${JSON.stringify(run)}\n\n`;
+  for (const client of eventClients) client.write(payload);
+}
+
+async function persist(run) {
   await writeFile(dataFile, JSON.stringify([...runs.values()], null, 2));
+  if (run) emitRun(run);
 }
 
 async function jsonBody(req) {
@@ -86,13 +99,39 @@ function executeCodex(run, sandbox, prompt) {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    processes.set(run.id, child);
     let stdout = "";
+    let buffer = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
+    const recordLine = (line) => {
+      if (!line.trim()) return;
+      let event;
+      try { event = JSON.parse(line); } catch { event = { type: "output", message: line }; }
+      const message = event.message || event.text || event.item?.text || event.item?.content || event.type || "Codex event";
+      const display = typeof message === "string" ? message : JSON.stringify(message);
+      run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
+      if (run.logs.length > 500) run.logs.splice(0, run.logs.length - 500);
+      run.updatedAt = new Date().toISOString();
+      emitRun(run);
+    };
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      buffer += text;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(recordLine);
+    });
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
+    child.on("error", (error) => {
+      processes.delete(run.id);
+      reject(error);
+    });
     child.on("close", (code) => {
+      processes.delete(run.id);
+      recordLine(buffer);
       if (code === 0) resolve(stdout.trim());
+      else if (run.cancelRequested) reject(new Error("Run cancelled"));
       else reject(new Error(stderr.trim() || `Codex exited with code ${code}`));
     });
   });
@@ -102,7 +141,7 @@ async function analyze(run) {
   try {
     await createWorktree(run);
     transition(run, "running", "Read-only analysis started");
-    await persist();
+    await persist(run);
     run.output = await executeCodex(
       run,
       "read-only",
@@ -110,15 +149,16 @@ async function analyze(run) {
     );
     requestWriteApproval(run);
   } catch (error) {
-    transition(run, "failed", "Analysis failed", { error: error.message });
+    if (run.state !== "cancelled") transition(run, "failed", "Analysis failed", { error: error.message });
+    else await cleanupWorktree(run);
   }
-  await persist();
+  await persist(run);
 }
 
 async function implement(run) {
   try {
     transition(run, "running", "Approved implementation started");
-    await persist();
+    await persist(run);
     run.output += `\n\n--- Implementation ---\n${await executeCodex(
       run,
       "workspace-write",
@@ -134,9 +174,13 @@ async function implement(run) {
       requestMergeApproval(run, { diff, diffStat });
     }
   } catch (error) {
-    transition(run, "failed", "Implementation failed", { error: error.message });
+    if (run.state !== "cancelled") transition(run, "failed", "Implementation failed", { error: error.message });
+    else if (run.worktree) {
+      await git(run.worktree, ["reset", "--hard", "HEAD"]);
+      await git(run.worktree, ["clean", "-fd"]);
+    }
   }
-  await persist();
+  await persist(run);
 }
 
 async function applyChanges(run) {
@@ -145,10 +189,36 @@ async function applyChanges(run) {
   await git(run.repository, ["apply", "--3way", "--whitespace=nowarn", "-"], run.diff);
   await cleanupWorktree(run);
   applyRun(run);
-  await persist();
+  await persist(run);
+}
+
+async function retry(run) {
+  prepareRetry(run);
+  if (run.phase === "analysis") {
+    await cleanupWorktree(run);
+    void analyze(run);
+  } else {
+    if (!run.worktree) await createWorktree(run);
+    await git(run.worktree, ["reset", "--hard", "HEAD"]);
+    await git(run.worktree, ["clean", "-fd"]);
+    run.state = "approved";
+    void implement(run);
+  }
+  await persist(run);
 }
 
 async function api(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/events") {
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write("retry: 1500\n\n");
+    eventClients.add(res);
+    req.on("close", () => eventClients.delete(res));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/api/runs") {
     return send(res, 200, [...runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   }
@@ -158,15 +228,24 @@ async function api(req, res, url) {
     if (!body.prompt?.trim()) throw new Error("Task description is required");
     const run = createRun({ id: randomUUID(), repository, prompt: body.prompt.trim() });
     runs.set(run.id, run);
-    await persist();
+    await persist(run);
     void analyze(run);
     return send(res, 202, run);
   }
-  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard)$/);
+  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard|cancel|retry)$/);
   if (req.method === "POST" && match) {
     const run = runs.get(match[1]);
     if (!run) return send(res, 404, { error: "Run not found" });
-    if (match[2] === "reject") {
+    if (match[2] === "cancel") {
+      cancelRun(run);
+      const child = processes.get(run.id);
+      if (child) {
+        child.kill("SIGTERM");
+        setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 3000).unref();
+      }
+    } else if (match[2] === "retry") {
+      await retry(run);
+    } else if (match[2] === "reject") {
       rejectRun(run);
       await cleanupWorktree(run);
     } else if (match[2] === "discard") {
@@ -178,7 +257,7 @@ async function api(req, res, url) {
       approveRun(run);
       void implement(run);
     }
-    await persist();
+    await persist(run);
     return send(res, 202, run);
   }
   return false;
