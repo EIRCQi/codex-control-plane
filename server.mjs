@@ -11,7 +11,7 @@ import { builtInTemplates, createProject, createTemplate, renderTemplate } from 
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
-const dataDir = path.join(root, ".codex-control-plane");
+const dataDir = process.env.CODEX_CONTROL_PLANE_DATA_DIR || path.join(root, ".codex-control-plane");
 const dataFile = path.join(dataDir, "runs.json");
 const settingsFile = path.join(dataDir, "settings.json");
 const projectsFile = path.join(dataDir, "projects.json");
