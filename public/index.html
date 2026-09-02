@@ -15,7 +15,7 @@
         <button class="nav">◇ <span>Workflows</span></button>
         <button class="nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
         <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
-        <button class="nav">⚙ <span>Settings</span></button>
+        <button class="nav" data-target="budget-settings">⚙ <span>Settings</span></button>
       </nav>
       <div class="local-status"><i></i><div><strong>Local runner</strong><small>Connected</small></div></div>
     </aside>
@@ -49,6 +49,14 @@
         </div>
         <div class="usage-table-wrap"><table><thead><tr><th>Task</th><th>Model</th><th>Input</th><th>Cached</th><th>Output</th><th>Total</th><th>Runtime</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
         <p class="cost-note">Cost is intentionally not estimated: ChatGPT-authenticated Codex usage does not map directly to API per-token pricing.</p>
+        <form class="budget-settings" id="budget-settings">
+          <div><p class="eyebrow">GUARDRAILS</p><h3>Budgets & concurrency</h3><p>Use 0 for an unlimited token budget.</p></div>
+          <label>Concurrent runs<input name="maxConcurrentRuns" type="number" min="1" max="8" required /></label>
+          <label>Tokens per run<input name="maxTokensPerRun" type="number" min="0" step="1000" required /></label>
+          <label>Tokens per repository<input name="maxTokensPerRepository" type="number" min="0" step="1000" required /></label>
+          <button class="primary">Save limits</button>
+          <span id="settings-status"></span>
+        </form>
       </section>
     </main>
     <dialog id="task-dialog">
