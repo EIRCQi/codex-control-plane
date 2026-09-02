@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition } from "./lib/workflow.mjs";
 import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
+import { startupErrorMessage } from "./lib/startup.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -481,4 +482,9 @@ export const serverReady = new Promise((resolve, reject) => {
   });
 });
 
-await serverReady;
+try {
+  await serverReady;
+} catch (error) {
+  console.error(startupErrorMessage(error, port));
+  process.exitCode = 1;
+}
