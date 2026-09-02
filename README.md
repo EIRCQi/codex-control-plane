@@ -34,6 +34,10 @@ Search runs by task text or repository and filter by state, project or archive s
 
 The notification center keeps the latest 50 approval and run-result alerts in the browser, with unread counts and direct links to run details. Optional desktop alerts cover write approvals, diff reviews, successful completion, failures, cancellations and budget stops. Notification preferences and history stay in browser-local storage; permission is requested only after clicking **Enable desktop alerts**.
 
+## Installable app
+
+Browsers with PWA support can install the local dashboard into a standalone application window from the **Install app** button. A service worker caches only the static application shell; API responses, run history and the live SSE stream are deliberately never cached. The local Node runner must remain running for repository access and task execution.
+
 ## Requirements
 
 - Node.js 20+
