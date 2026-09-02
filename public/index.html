@@ -11,10 +11,10 @@
     <aside>
       <div class="brand"><span class="brand-mark">C</span><span>Control Plane</span></div>
       <nav>
-        <button class="nav active">⌁ <span>Mission Control</span></button>
+        <button class="nav active" data-target="top">⌁ <span>Mission Control</span></button>
         <button class="nav">◇ <span>Workflows</span></button>
         <button class="nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
-        <button class="nav">⌇ <span>Usage</span></button>
+        <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
         <button class="nav">⚙ <span>Settings</span></button>
       </nav>
       <div class="local-status"><i></i><div><strong>Local runner</strong><small>Connected</small></div></div>
@@ -34,6 +34,21 @@
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
         <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p></div>
         <div id="runs" class="runs"></div>
+      </section>
+      <section class="usage-panel" id="usage-panel">
+        <div class="panel-title"><div><p class="eyebrow">OBSERVABILITY</p><h2>Usage overview</h2></div><span class="usage-note">Event-reported tokens</span></div>
+        <div class="usage-metrics">
+          <article><span>Total tokens</span><strong id="total-tokens">0</strong><small>Across all local runs</small></article>
+          <article><span>Input tokens</span><strong id="input-tokens">0</strong><small id="cached-tokens">0 cached</small></article>
+          <article><span>Output tokens</span><strong id="output-tokens">0</strong><small>Model responses</small></article>
+          <article><span>Agent time</span><strong id="agent-time">0s</strong><small>Codex process runtime</small></article>
+        </div>
+        <div class="usage-grid">
+          <div class="token-mix"><h3>Token mix</h3><div class="bar"><i id="input-bar"></i><em id="cached-bar"></em><b id="output-bar"></b></div><div class="legend"><span><i></i>Input</span><span><i></i>Output</span><span><i></i>Cached input</span></div></div>
+          <div class="model-usage"><h3>Model usage</h3><div id="model-list" class="model-list"><p>No model data yet</p></div></div>
+        </div>
+        <div class="usage-table-wrap"><table><thead><tr><th>Task</th><th>Model</th><th>Input</th><th>Cached</th><th>Output</th><th>Total</th><th>Runtime</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
+        <p class="cost-note">Cost is intentionally not estimated: ChatGPT-authenticated Codex usage does not map directly to API per-token pricing.</p>
       </section>
     </main>
     <dialog id="task-dialog">
