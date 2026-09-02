@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyRun, approveRun, cancelRun, createRun, discardRun, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
+import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -24,6 +25,9 @@ try {
   for (const run of saved) {
     run.logs ||= [];
     run.retries ||= 0;
+    run.executionSeq ||= 0;
+    run.usage ||= emptyUsage();
+    run.usageSeen ||= [];
     run.cancelRequested = false;
     runs.set(run.id, run);
   }
@@ -94,6 +98,8 @@ async function cleanupWorktree(run) {
 
 function executeCodex(run, sandbox, prompt) {
   return new Promise((resolve, reject) => {
+    const executionSeq = ++run.executionSeq;
+    const startedAt = Date.now();
     const child = spawn("codex", ["exec", "--sandbox", sandbox, "--json", prompt], {
       cwd: run.worktree,
       env: process.env,
@@ -107,6 +113,7 @@ function executeCodex(run, sandbox, prompt) {
       if (!line.trim()) return;
       let event;
       try { event = JSON.parse(line); } catch { event = { type: "output", message: line }; }
+      recordUsage(run, event, executionSeq);
       const message = event.message || event.text || event.item?.text || event.item?.content || event.type || "Codex event";
       const display = typeof message === "string" ? message : JSON.stringify(message);
       run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
@@ -129,6 +136,7 @@ function executeCodex(run, sandbox, prompt) {
     });
     child.on("close", (code) => {
       processes.delete(run.id);
+      addDuration(run, Date.now() - startedAt);
       recordLine(buffer);
       if (code === 0) resolve(stdout.trim());
       else if (run.cancelRequested) reject(new Error("Run cancelled"));
@@ -221,6 +229,9 @@ async function api(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/runs") {
     return send(res, 200, [...runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  }
+  if (req.method === "GET" && url.pathname === "/api/usage") {
+    return send(res, 200, aggregateUsage([...runs.values()]));
   }
   if (req.method === "POST" && url.pathname === "/api/runs") {
     const body = await jsonBody(req);
