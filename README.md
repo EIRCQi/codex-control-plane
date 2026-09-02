@@ -18,6 +18,10 @@ The dashboard streams Codex JSON events over Server-Sent Events. Active runs can
 
 The local Usage overview reads token counts and model metadata from Codex completion events. It reports input, cached input, output and total tokens, plus measured Codex process runtime per task and in aggregate. It does not estimate dollar cost because ChatGPT-authenticated Codex usage does not map directly to API per-token pricing.
 
+## Guardrails
+
+The local settings panel controls maximum concurrent Codex phases, tokens per run, and cumulative tokens per repository. Runs wait in a queue when all concurrency slots are occupied. A repository at quota cannot start another task, and an active run is stopped when an incoming usage event crosses a configured limit. Set either token limit to `0` for unlimited.
+
 ## Requirements
 
 - Node.js 20+
