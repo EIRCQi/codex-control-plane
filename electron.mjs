@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { desktopWindowOptions, trayMenu } from "./lib/desktop.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const iconPath = path.join(root, "public", "icon.svg");
+const iconPath = path.join(root, "build", "icon.png");
 const url = `http://127.0.0.1:${Number(process.env.PORT || 4310)}`;
 const hasLock = app.requestSingleInstanceLock();
 let window = null;
@@ -31,6 +31,7 @@ function rebuildTrayMenu() {
 }
 
 async function start() {
+  process.env.CODEX_CONTROL_PLANE_DATA_DIR = path.join(app.getPath("userData"), "data");
   const { serverReady } = await import("./server.mjs");
   await serverReady;
   const icon = nativeImage.createFromPath(iconPath);
@@ -51,7 +52,9 @@ async function start() {
   });
   await window.loadURL(url);
 
-  tray = new Tray(icon);
+  const trayIcon = icon.resize({ width: process.platform === "darwin" ? 18 : 22, height: process.platform === "darwin" ? 18 : 22 });
+  if (process.platform === "darwin") trayIcon.setTemplateImage(true);
+  tray = new Tray(trayIcon);
   tray.setToolTip("Codex Control Plane · Local runner active");
   tray.on("click", () => window?.isVisible() ? window.hide() : showWindow());
   rebuildTrayMenu();
