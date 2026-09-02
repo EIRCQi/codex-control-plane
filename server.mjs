@@ -5,21 +5,25 @@ import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "./lib/workflow.mjs";
 import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 const dataDir = path.join(root, ".codex-control-plane");
 const dataFile = path.join(dataDir, "runs.json");
+const settingsFile = path.join(dataDir, "settings.json");
 const port = Number(process.env.PORT || 4310);
 const worktreeRoot = path.join(os.tmpdir(), "codex-control-plane-worktrees");
 const runs = new Map();
 const processes = new Map();
 const eventClients = new Set();
+const defaultSettings = { maxConcurrentRuns: 2, maxTokensPerRun: 200000, maxTokensPerRepository: 1000000 };
+let settings = { ...defaultSettings };
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(worktreeRoot, { recursive: true });
+try { settings = { ...defaultSettings, ...JSON.parse(await readFile(settingsFile, "utf8")) }; } catch {}
 try {
   const saved = JSON.parse(await readFile(dataFile, "utf8"));
   for (const run of saved) {
@@ -29,6 +33,14 @@ try {
     run.usage ||= emptyUsage();
     run.usageSeen ||= [];
     run.cancelRequested = false;
+    run.budgetExceeded ||= false;
+    run.queuedAction ||= run.phase === "implementation" ? "implementation" : "analysis";
+    run.starting = false;
+    if (run.state === "running") {
+      run.state = "failed";
+      run.error = "Control plane restarted while this phase was running";
+      run.events.push({ type: "run.failed", message: run.error, at: new Date().toISOString() });
+    }
     runs.set(run.id, run);
   }
 } catch {}
@@ -41,6 +53,14 @@ function emitRun(run) {
 async function persist(run) {
   await writeFile(dataFile, JSON.stringify([...runs.values()], null, 2));
   if (run) emitRun(run);
+}
+
+async function persistSettings() {
+  await writeFile(settingsFile, JSON.stringify(settings, null, 2));
+}
+
+function repositoryTokens(repository) {
+  return [...runs.values()].filter((run) => run.repository === repository).reduce((sum, run) => sum + (run.usage?.totalTokens || 0), 0);
 }
 
 async function jsonBody(req) {
@@ -113,7 +133,22 @@ function executeCodex(run, sandbox, prompt) {
       if (!line.trim()) return;
       let event;
       try { event = JSON.parse(line); } catch { event = { type: "output", message: line }; }
-      recordUsage(run, event, executionSeq);
+      const usageChanged = recordUsage(run, event, executionSeq);
+      if (usageChanged && !run.budgetExceeded) {
+        let message = null;
+        if (settings.maxTokensPerRun > 0 && run.usage.totalTokens > settings.maxTokensPerRun) {
+          message = `Run token budget exceeded (${run.usage.totalTokens.toLocaleString()} / ${settings.maxTokensPerRun.toLocaleString()})`;
+        } else {
+          const repoTokens = repositoryTokens(run.repository);
+          if (settings.maxTokensPerRepository > 0 && repoTokens > settings.maxTokensPerRepository) {
+            message = `Repository token quota exceeded (${repoTokens.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`;
+          }
+        }
+        if (message && ["queued", "running", "approved"].includes(run.state)) {
+          exceedBudget(run, message);
+          child.kill("SIGTERM");
+        }
+      }
       const message = event.message || event.text || event.item?.text || event.item?.content || event.type || "Codex event";
       const display = typeof message === "string" ? message : JSON.stringify(message);
       run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
@@ -147,6 +182,7 @@ function executeCodex(run, sandbox, prompt) {
 
 async function analyze(run) {
   try {
+    run.queuedAction = null;
     await createWorktree(run);
     transition(run, "running", "Read-only analysis started");
     await persist(run);
@@ -157,7 +193,7 @@ async function analyze(run) {
     );
     requestWriteApproval(run);
   } catch (error) {
-    if (run.state !== "cancelled") transition(run, "failed", "Analysis failed", { error: error.message });
+    if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Analysis failed", { error: error.message });
     else await cleanupWorktree(run);
   }
   await persist(run);
@@ -165,6 +201,7 @@ async function analyze(run) {
 
 async function implement(run) {
   try {
+    run.queuedAction = null;
     transition(run, "running", "Approved implementation started");
     await persist(run);
     run.output += `\n\n--- Implementation ---\n${await executeCodex(
@@ -182,7 +219,7 @@ async function implement(run) {
       requestMergeApproval(run, { diff, diffStat });
     }
   } catch (error) {
-    if (run.state !== "cancelled") transition(run, "failed", "Implementation failed", { error: error.message });
+    if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Implementation failed", { error: error.message });
     else if (run.worktree) {
       await git(run.worktree, ["reset", "--hard", "HEAD"]);
       await git(run.worktree, ["clean", "-fd"]);
@@ -200,19 +237,37 @@ async function applyChanges(run) {
   await persist(run);
 }
 
+function drainQueue() {
+  while ([...runs.values()].filter((run) => run.starting).length < settings.maxConcurrentRuns) {
+    const run = [...runs.values()].find((candidate) => !candidate.starting && (
+      (candidate.state === "queued" && candidate.queuedAction === "analysis") ||
+      (candidate.state === "approved" && candidate.queuedAction === "implementation")
+    ));
+    if (!run) break;
+    run.starting = true;
+    const job = run.queuedAction === "implementation" ? implement : analyze;
+    void job(run).finally(() => {
+      run.starting = false;
+      void persist(run);
+      drainQueue();
+    });
+  }
+}
+
 async function retry(run) {
   prepareRetry(run);
   if (run.phase === "analysis") {
     await cleanupWorktree(run);
-    void analyze(run);
+    run.queuedAction = "analysis";
   } else {
     if (!run.worktree) await createWorktree(run);
     await git(run.worktree, ["reset", "--hard", "HEAD"]);
     await git(run.worktree, ["clean", "-fd"]);
     run.state = "approved";
-    void implement(run);
+    run.queuedAction = "implementation";
   }
   await persist(run);
+  drainQueue();
 }
 
 async function api(req, res, url) {
@@ -233,14 +288,35 @@ async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/usage") {
     return send(res, 200, aggregateUsage([...runs.values()]));
   }
+  if (req.method === "GET" && url.pathname === "/api/settings") {
+    return send(res, 200, settings);
+  }
+  if (req.method === "PUT" && url.pathname === "/api/settings") {
+    const body = await jsonBody(req);
+    const next = {
+      maxConcurrentRuns: Number(body.maxConcurrentRuns),
+      maxTokensPerRun: Number(body.maxTokensPerRun),
+      maxTokensPerRepository: Number(body.maxTokensPerRepository),
+    };
+    if (!Number.isInteger(next.maxConcurrentRuns) || next.maxConcurrentRuns < 1 || next.maxConcurrentRuns > 8) throw new Error("Concurrent runs must be between 1 and 8");
+    if (![next.maxTokensPerRun, next.maxTokensPerRepository].every((value) => Number.isInteger(value) && value >= 0)) throw new Error("Token limits must be non-negative integers");
+    settings = next;
+    await persistSettings();
+    drainQueue();
+    return send(res, 200, settings);
+  }
   if (req.method === "POST" && url.pathname === "/api/runs") {
     const body = await jsonBody(req);
     const repository = await validateRepository(body.repository);
     if (!body.prompt?.trim()) throw new Error("Task description is required");
+    const used = repositoryTokens(repository);
+    if (settings.maxTokensPerRepository > 0 && used >= settings.maxTokensPerRepository) {
+      throw new Error(`Repository token quota reached (${used.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`);
+    }
     const run = createRun({ id: randomUUID(), repository, prompt: body.prompt.trim() });
     runs.set(run.id, run);
     await persist(run);
-    void analyze(run);
+    drainQueue();
     return send(res, 202, run);
   }
   const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard|cancel|retry)$/);
@@ -266,7 +342,8 @@ async function api(req, res, url) {
       await applyChanges(run);
     } else {
       approveRun(run);
-      void implement(run);
+      run.queuedAction = "implementation";
+      drainQueue();
     }
     await persist(run);
     return send(res, 202, run);
@@ -275,6 +352,8 @@ async function api(req, res, url) {
 }
 
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8" };
+
+drainQueue();
 
 createServer(async (req, res) => {
   try {
