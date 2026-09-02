@@ -12,7 +12,7 @@
       <div class="brand"><span class="brand-mark">C</span><span>Control Plane</span></div>
       <nav>
         <button class="nav active" data-target="top">⌁ <span>Mission Control</span></button>
-        <button class="nav">◇ <span>Workflows</span></button>
+        <button class="nav" data-target="catalog-panel">◇ <span>Projects & templates</span></button>
         <button class="nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
         <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
         <button class="nav" data-target="budget-settings">⚙ <span>Settings</span></button>
@@ -34,6 +34,32 @@
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
         <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p></div>
         <div id="runs" class="runs"></div>
+      </section>
+      <section class="catalog-panel" id="catalog-panel">
+        <div class="panel-title"><div><p class="eyebrow">WORKSPACE CATALOG</p><h2>Projects & templates</h2></div><span class="usage-note">Stored locally</span></div>
+        <div class="catalog-grid">
+          <div class="catalog-column">
+            <div class="catalog-head"><div><h3>Registered projects</h3><p>Select a project instead of entering its path for every run.</p></div><button class="secondary" id="show-project-form">＋ Add project</button></div>
+            <form class="inline-form" id="project-form" hidden>
+              <input name="name" required placeholder="Project name" />
+              <input name="repository" required placeholder="/absolute/path/to/repository" />
+              <button class="primary">Register</button><button type="button" class="secondary form-cancel">Cancel</button>
+              <p class="form-message"></p>
+            </form>
+            <div class="catalog-list" id="project-list"></div>
+          </div>
+          <div class="catalog-column">
+            <div class="catalog-head"><div><h3>Task templates</h3><p>Turn repeatable instructions into one-click starting points.</p></div><button class="secondary" id="show-template-form">＋ New template</button></div>
+            <form class="inline-form template-form" id="template-form" hidden>
+              <input name="name" required placeholder="Template name" />
+              <input name="description" placeholder="Short description" />
+              <textarea name="prompt" required rows="4" placeholder="Instructions containing {{task}}"></textarea>
+              <button class="primary">Save</button><button type="button" class="secondary form-cancel">Cancel</button>
+              <p class="form-message"></p>
+            </form>
+            <div class="catalog-list" id="template-list"></div>
+          </div>
+        </div>
       </section>
       <section class="usage-panel" id="usage-panel">
         <div class="panel-title"><div><p class="eyebrow">OBSERVABILITY</p><h2>Usage overview</h2></div><span class="usage-note">Event-reported tokens</span></div>
@@ -62,8 +88,9 @@
     <dialog id="task-dialog">
       <form id="task-form">
         <div class="dialog-head"><div><p class="eyebrow">NEW RUN</p><h2>Give Codex a task</h2></div><button type="button" class="icon" id="close-dialog">×</button></div>
-        <label>Repository path<input name="repository" required placeholder="/absolute/path/to/git/repository" /></label>
-        <label>Task<textarea name="prompt" required rows="5" placeholder="Describe the change and expected outcome…"></textarea></label>
+        <label>Project<select name="projectId" required id="task-project"><option value="">Register a project first</option></select></label>
+        <label>Template<select name="templateId" id="task-template"><option value="">No template</option></select></label>
+        <label>Task details<textarea name="prompt" required rows="5" placeholder="Describe the change and expected outcome…"></textarea></label>
         <div class="policy"><span>◉</span><div><strong>Protected execution</strong><p>Analysis runs read-only. You must approve before Codex can modify files.</p></div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary">Start analysis</button></div>
         <p id="form-error" class="error"></p>
