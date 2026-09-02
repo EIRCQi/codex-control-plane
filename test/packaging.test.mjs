@@ -18,3 +18,12 @@ test("all desktop platforms have installer targets", async () => {
   assert.deepEqual(pkg.build.win.target, ["nsis", "portable"]);
   assert.deepEqual(pkg.build.linux.target, ["AppImage", "deb"]);
 });
+
+test("tag builds publish checksummed and attested releases", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/build-desktop.yml", import.meta.url), "utf8");
+  assert.match(workflow, /Verify tag matches package version/);
+  assert.match(workflow, /actions\/attest-build-provenance@v2/);
+  assert.match(workflow, /SHA256SUMS\.txt/);
+  assert.match(workflow, /gh release create/);
+  assert.match(workflow, /gh release upload/);
+});
