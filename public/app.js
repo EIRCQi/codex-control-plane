@@ -3,6 +3,8 @@ const emptyEl = document.querySelector("#empty");
 const dialog = document.querySelector("#task-dialog");
 const form = document.querySelector("#task-form");
 let currentRuns = [];
+let projects = [];
+let templates = [];
 const statusLabel = {
   queued: "Queued",
   running: "Running",
@@ -113,7 +115,49 @@ async function loadSettings() {
   }
 }
 
-document.querySelector("#new-task").addEventListener("click", () => dialog.showModal());
+function renderCatalog() {
+  document.querySelector("#project-list").innerHTML = projects.length ? projects.map((project) => `<article><div><strong>${escapeHtml(project.name)}</strong><p>${escapeHtml(project.repository)}</p><small>${escapeHtml(project.branch)}${project.remote ? ` · ${escapeHtml(project.remote)}` : ""}</small></div><button class="icon delete-project" data-id="${project.id}" title="Remove registration">×</button></article>`).join("") : '<p class="catalog-empty">No projects registered yet.</p>';
+  document.querySelector("#template-list").innerHTML = templates.map((template) => `<article><div><strong>${escapeHtml(template.name)}</strong>${template.builtIn ? '<span class="builtin">Built in</span>' : ""}<p>${escapeHtml(template.description || "Custom workflow template")}</p></div>${template.builtIn ? "" : `<button class="icon delete-template" data-id="${template.id}" title="Delete template">×</button>`}</article>`).join("");
+  document.querySelector("#task-project").innerHTML = projects.length ? `<option value="">Choose project…</option>${projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)} · ${escapeHtml(project.branch)}</option>`).join("")}` : '<option value="">Register a project first</option>';
+  document.querySelector("#task-template").innerHTML = '<option value="">No template</option>' + templates.map((template) => `<option value="${template.id}">${escapeHtml(template.name)}</option>`).join("");
+  document.querySelectorAll(".delete-project").forEach((button) => button.addEventListener("click", async () => {
+    await fetch(`/api/projects/${button.dataset.id}`, { method: "DELETE" });
+    await loadCatalog();
+  }));
+  document.querySelectorAll(".delete-template").forEach((button) => button.addEventListener("click", async () => {
+    await fetch(`/api/templates/${button.dataset.id}`, { method: "DELETE" });
+    await loadCatalog();
+  }));
+}
+
+async function loadCatalog() {
+  [projects, templates] = await Promise.all([
+    fetch("/api/projects").then((response) => response.json()),
+    fetch("/api/templates").then((response) => response.json()),
+  ]);
+  renderCatalog();
+}
+
+async function submitCatalogForm(event, endpoint) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+  const message = form.querySelector(".form-message");
+  if (!response.ok) return (message.textContent = (await response.json()).error);
+  form.reset();
+  form.hidden = true;
+  message.textContent = "";
+  await loadCatalog();
+}
+
+document.querySelector("#new-task").addEventListener("click", () => {
+  if (!projects.length) {
+    document.querySelector("#project-form").hidden = false;
+    document.querySelector("#catalog-panel").scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  dialog.showModal();
+});
 document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
 document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
 document.querySelectorAll(".nav[data-target]").forEach((button) => button.addEventListener("click", () => {
@@ -134,6 +178,11 @@ document.querySelector("#budget-settings").addEventListener("submit", async (eve
     setTimeout(() => (status.textContent = ""), 2500);
   }
 });
+document.querySelector("#show-project-form").addEventListener("click", () => (document.querySelector("#project-form").hidden = false));
+document.querySelector("#show-template-form").addEventListener("click", () => (document.querySelector("#template-form").hidden = false));
+document.querySelectorAll(".form-cancel").forEach((button) => button.addEventListener("click", () => (button.closest("form").hidden = true)));
+document.querySelector("#project-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/projects"));
+document.querySelector("#template-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/templates"));
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = document.querySelector("#form-error");
@@ -148,6 +197,7 @@ form.addEventListener("submit", async (event) => {
 
 await refresh();
 await loadSettings();
+await loadCatalog();
 const events = new EventSource("/api/events");
 events.addEventListener("run", (event) => {
   const changed = JSON.parse(event.data);
