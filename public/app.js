@@ -1,3 +1,5 @@
+import { notificationForTransition } from "./notifications.js";
+
 const runsEl = document.querySelector("#runs");
 const emptyEl = document.querySelector("#empty");
 const dialog = document.querySelector("#task-dialog");
@@ -6,6 +8,10 @@ const runDialog = document.querySelector("#run-dialog");
 let currentRuns = [];
 let projects = [];
 let templates = [];
+const notificationStorageKey = "codex-control-plane.notifications.v1";
+const notificationPreferenceKey = "codex-control-plane.notification-preferences.v1";
+let notifications = readLocal(notificationStorageKey, []);
+let notificationPreferences = readLocal(notificationPreferenceKey, { approvals: true, results: true });
 const statusLabel = {
   queued: "Queued",
   running: "Running",
@@ -23,6 +29,52 @@ const escapeHtml = (value = "") => value.replace(/[&<>'"]/g, (char) => ({ "&": "
 const formatTokens = (value = 0) => Intl.NumberFormat("en", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 const formatDuration = (ms = 0) => ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 const terminalStates = new Set(["completed", "failed", "cancelled", "discarded", "budget_exceeded"]);
+
+function readLocal(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+}
+
+function writeLocal(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function renderNotifications() {
+  const unread = notifications.filter((item) => !item.read).length;
+  const badge = document.querySelector("#notification-badge");
+  badge.hidden = unread === 0;
+  badge.textContent = unread > 99 ? "99+" : unread;
+  document.querySelector("#notification-list").innerHTML = notifications.length ? notifications.map((item) => `
+    <article class="${item.read ? "" : "unread"}" data-notification-id="${escapeHtml(item.id)}" data-run-id="${escapeHtml(item.runId)}">
+      <i></i><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.task)}</p><time>${new Date(item.at).toLocaleString()}</time></div>
+    </article>`).join("") : '<p class="notification-empty">No notifications yet.</p>';
+  document.querySelectorAll("[data-notification-id]").forEach((item) => item.addEventListener("click", () => {
+    const notification = notifications.find((entry) => entry.id === item.dataset.notificationId);
+    if (notification) notification.read = true;
+    writeLocal(notificationStorageKey, notifications);
+    renderNotifications();
+    document.querySelector("#notification-popover").hidden = true;
+    const run = currentRuns.find((entry) => entry.id === item.dataset.runId);
+    if (run) openRunDetail(run);
+  }));
+  document.querySelector("#notify-approvals").checked = notificationPreferences.approvals;
+  document.querySelector("#notify-results").checked = notificationPreferences.results;
+  const permission = !window.Notification ? "unsupported" : Notification.permission;
+  document.querySelector("#notification-permission-status").textContent = permission === "granted" ? "Desktop alerts enabled" : permission === "denied" ? "Desktop alerts blocked by browser" : permission === "unsupported" ? "Desktop alerts are not supported" : "Permission not requested";
+  document.querySelector("#enable-system-notifications").hidden = permission === "granted" || permission === "unsupported";
+}
+
+function addNotification(notification) {
+  if (!notification || notifications.some((item) => item.id === notification.id)) return;
+  notifications.unshift(notification);
+  notifications = notifications.slice(0, 50);
+  writeLocal(notificationStorageKey, notifications);
+  renderNotifications();
+  const allowed = notification.kind === "approval" ? notificationPreferences.approvals : notificationPreferences.results;
+  if (allowed && window.Notification && Notification.permission === "granted") {
+    const desktop = new Notification(notification.title, { body: notification.task, tag: notification.id });
+    desktop.onclick = () => { window.focus(); const run = currentRuns.find((item) => item.id === notification.runId); if (run) openRunDetail(run); desktop.close(); };
+  }
+}
 
 function filteredRuns(runs) {
   const query = document.querySelector("#run-search").value.trim().toLowerCase();
@@ -208,6 +260,33 @@ document.querySelector("#new-task").addEventListener("click", () => {
   }
   dialog.showModal();
 });
+document.querySelector("#notification-button").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const popover = document.querySelector("#notification-popover");
+  popover.hidden = !popover.hidden;
+  event.currentTarget.setAttribute("aria-expanded", String(!popover.hidden));
+});
+document.querySelector("#notification-popover").addEventListener("click", (event) => event.stopPropagation());
+document.addEventListener("click", () => {
+  document.querySelector("#notification-popover").hidden = true;
+  document.querySelector("#notification-button").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#mark-notifications-read").addEventListener("click", () => {
+  notifications.forEach((item) => (item.read = true));
+  writeLocal(notificationStorageKey, notifications);
+  renderNotifications();
+});
+document.querySelector("#enable-system-notifications").addEventListener("click", async () => {
+  if (window.Notification) await Notification.requestPermission();
+  renderNotifications();
+});
+document.querySelectorAll("#notify-approvals,#notify-results").forEach((control) => control.addEventListener("change", () => {
+  notificationPreferences = {
+    approvals: document.querySelector("#notify-approvals").checked,
+    results: document.querySelector("#notify-results").checked,
+  };
+  writeLocal(notificationPreferenceKey, notificationPreferences);
+}));
 document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
 document.querySelector("#close-run-dialog").addEventListener("click", () => runDialog.close());
 document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
@@ -250,12 +329,15 @@ form.addEventListener("submit", async (event) => {
 await refresh();
 await loadSettings();
 await loadCatalog();
+renderNotifications();
 const events = new EventSource("/api/events");
 events.addEventListener("run", (event) => {
   const changed = JSON.parse(event.data);
+  const previous = currentRuns.find((run) => run.id === changed.id);
   const next = currentRuns.filter((run) => run.id !== changed.id);
   next.push(changed);
   next.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   render(next);
+  addNotification(notificationForTransition(previous, changed));
 });
 events.onerror = () => setTimeout(refresh, 2000);
