@@ -2,6 +2,11 @@
   "name": "codex-control-plane",
   "version": "0.1.0",
   "description": "A local-first control plane for visible, controlled and recoverable Codex runs.",
+  "author": {
+    "name": "EIRCQi",
+    "email": "64245730+EIRCQi@users.noreply.github.com"
+  },
+  "desktopName": "dev.eircqi.codex-control-plane",
   "private": true,
   "main": "electron.mjs",
   "type": "module",
@@ -51,6 +56,9 @@
     },
     "linux": {
       "category": "Development",
+      "maintainer": "EIRCQi <64245730+EIRCQi@users.noreply.github.com>",
+      "synopsis": "Local-first workflow control for Codex",
+      "syncDesktopName": true,
       "target": ["AppImage", "deb"]
     }
   }
