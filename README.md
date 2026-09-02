@@ -64,6 +64,8 @@ npm start
 
 Open <http://127.0.0.1:4310>.
 
+If port `4310` is already occupied, the desktop app or another local Runner may already be active. Open the URL first, inspect the listener with `lsof -nP -iTCP:4310 -sTCP:LISTEN`, or start an independent instance with `PORT=4311 npm start`.
+
 Run the state-machine tests with:
 
 ```bash
