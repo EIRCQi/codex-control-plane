@@ -1,18 +1,57 @@
 {
   "name": "codex-control-plane",
   "version": "0.1.0",
+  "description": "A local-first control plane for visible, controlled and recoverable Codex runs.",
   "private": true,
+  "main": "electron.mjs",
   "type": "module",
   "scripts": {
     "dev": "node --watch server.mjs",
     "desktop": "electron electron.mjs",
+    "dist": "electron-builder --publish never",
+    "pack": "electron-builder --dir",
+    "predesktop": "npm run prepare-assets",
+    "predist": "npm run prepare-assets",
+    "prepack": "npm run prepare-assets",
+    "prepare-assets": "node scripts/generate-icon.mjs",
     "start": "node server.mjs",
     "test": "node --test"
   },
   "devDependencies": {
-    "electron": "^39.0.0"
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "sharp": "^0.34.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "build": {
+    "appId": "dev.eircqi.codex-control-plane",
+    "productName": "Codex Control Plane",
+    "artifactName": "Codex-Control-Plane-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron.mjs",
+      "server.mjs",
+      "package.json",
+      "build/icon.png",
+      "lib/**",
+      "public/**"
+    ],
+    "icon": "build/icon.png",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "linux": {
+      "category": "Development",
+      "target": ["AppImage", "deb"]
+    }
   }
 }
