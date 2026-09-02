@@ -455,7 +455,7 @@ const mime = {
 
 drainQueue();
 
-createServer(async (req, res) => {
+export const controlServer = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith("/api/")) {
@@ -470,6 +470,15 @@ createServer(async (req, res) => {
   } catch (error) {
     send(res, 400, { error: error.message });
   }
-}).listen(port, "127.0.0.1", () => {
-  console.log(`Codex Control Plane: http://127.0.0.1:${port}`);
 });
+
+export const serverReady = new Promise((resolve, reject) => {
+  controlServer.once("error", reject);
+  controlServer.listen(port, "127.0.0.1", () => {
+    controlServer.off("error", reject);
+    console.log(`Codex Control Plane: http://127.0.0.1:${port}`);
+    resolve({ port, url: `http://127.0.0.1:${port}` });
+  });
+});
+
+await serverReady;
