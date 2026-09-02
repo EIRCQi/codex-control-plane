@@ -42,6 +42,12 @@ Browsers with PWA support can install the local dashboard into a standalone appl
 
 Install development dependencies once with `npm install`, then start the native desktop shell with `npm run desktop`. Electron starts the same local control server, opens an isolated renderer window and adds a system tray menu. Closing the window hides it while the Runner and active Codex tasks continue; use **Quit** in the tray menu to stop the application. The tray can also reopen the window or launch the dashboard in the default browser.
 
+## Desktop installers
+
+Run `npm run dist` to generate the 512px icon and build the installer for the current operating system. The configured targets are DMG/ZIP for macOS, NSIS/portable EXE for Windows, and AppImage/DEB for Linux. Packaged applications store runs, settings, projects and templates in Electron's per-user application-data directory rather than inside the read-only application bundle.
+
+The **Build desktop installers** GitHub Actions workflow can be started manually or by pushing a `v*` tag. It builds unsigned artifacts on native macOS, Windows and Linux runners and attaches them to the workflow run. Public distribution still requires platform-specific code-signing and, on macOS, notarization credentials.
+
 ## Requirements
 
 - Node.js 20+
