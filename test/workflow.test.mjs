@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "../lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "../lib/workflow.mjs";
 
 test("a run cannot write before approval", () => {
   const run = createRun({ id: "1", repository: "/tmp/repo", prompt: "Fix tests" });
@@ -55,4 +55,15 @@ test("an active run can be cancelled and retried", () => {
   assert.equal(run.state, "queued");
   assert.equal(run.retries, 1);
   assert.equal(run.cancelRequested, false);
+});
+
+test("a budget-limited run stops and can retry after settings change", () => {
+  const run = createRun({ id: "1", repository: "/tmp/repo", prompt: "Fix tests" });
+  transition(run, "running", "Analysis started");
+  exceedBudget(run, "Run token budget exceeded");
+  assert.equal(run.state, "budget_exceeded");
+  assert.equal(run.budgetExceeded, true);
+  prepareRetry(run);
+  assert.equal(run.state, "queued");
+  assert.equal(run.budgetExceeded, false);
 });
