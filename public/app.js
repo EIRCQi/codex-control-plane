@@ -13,6 +13,7 @@ const statusLabel = {
   failed: "Failed",
   cancelled: "Cancelled",
   discarded: "Discarded",
+  budget_exceeded: "Budget stopped",
 };
 
 const escapeHtml = (value = "") => value.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -53,7 +54,7 @@ async function action(id, type) {
 function runCard(run) {
   const activeActions = ["queued", "running", "approved"].includes(run.state)
     ? `<button class="secondary danger cancel-run" data-id="${run.id}">Cancel run</button>` : "";
-  const retryAction = ["failed", "cancelled"].includes(run.state)
+  const retryAction = ["failed", "cancelled", "budget_exceeded"].includes(run.state)
     ? `<button class="secondary retry-run" data-id="${run.id}">Retry ${run.phase}</button>` : "";
   const approval = run.state === "awaiting_approval" ? `
     <div class="approval-box">
@@ -74,6 +75,8 @@ function runCard(run) {
     ${run.output ? `<details ${run.state === "awaiting_approval" ? "open" : ""}><summary>Agent output</summary><pre>${escapeHtml(run.output)}</pre></details>` : ""}
     ${run.logs?.length ? `<details class="live-log" ${run.state === "running" ? "open" : ""}><summary><span class="pulse"></span> Live events (${run.logs.length})</summary><div class="log-lines">${run.logs.slice(-100).map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></details>` : ""}
     ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}
+    ${run.state === "queued" ? '<p class="queue-note">Waiting for an available concurrency slot.</p>' : ""}
+    ${run.state === "budget_exceeded" ? `<p class="budget-alert">${escapeHtml(run.events.at(-1)?.message || "Budget limit exceeded")}</p>` : ""}
     ${approval}
     ${mergeApproval}
   </article>`;
@@ -102,6 +105,14 @@ async function refresh() {
   render(await fetch("/api/runs").then((r) => r.json()));
 }
 
+async function loadSettings() {
+  const settings = await fetch("/api/settings").then((response) => response.json());
+  const settingsForm = document.querySelector("#budget-settings");
+  for (const [key, value] of Object.entries(settings)) {
+    if (settingsForm.elements[key]) settingsForm.elements[key].value = value;
+  }
+}
+
 document.querySelector("#new-task").addEventListener("click", () => dialog.showModal());
 document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
 document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
@@ -111,6 +122,18 @@ document.querySelectorAll(".nav[data-target]").forEach((button) => button.addEve
   if (button.dataset.target === "top") window.scrollTo({ top: 0, behavior: "smooth" });
   else document.querySelector(`#${button.dataset.target}`)?.scrollIntoView({ behavior: "smooth" });
 }));
+document.querySelector("#budget-settings").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const body = Object.fromEntries([...formData].map(([key, value]) => [key, Number(value)]));
+  const response = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const status = document.querySelector("#settings-status");
+  if (!response.ok) status.textContent = (await response.json()).error;
+  else {
+    status.textContent = "Limits saved";
+    setTimeout(() => (status.textContent = ""), 2500);
+  }
+});
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = document.querySelector("#form-error");
@@ -124,6 +147,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 await refresh();
+await loadSettings();
 const events = new EventSource("/api/events");
 events.addEventListener("run", (event) => {
   const changed = JSON.parse(event.data);
