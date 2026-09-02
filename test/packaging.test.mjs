@@ -17,6 +17,10 @@ test("all desktop platforms have installer targets", async () => {
   assert.deepEqual(pkg.build.mac.target, ["dmg", "zip"]);
   assert.deepEqual(pkg.build.win.target, ["nsis", "portable"]);
   assert.deepEqual(pkg.build.linux.target, ["AppImage", "deb"]);
+  assert.match(pkg.author.email, /@users\.noreply\.github\.com$/);
+  assert.match(pkg.build.linux.maintainer, /<.+@.+>/);
+  assert.equal(pkg.build.linux.syncDesktopName, true);
+  assert.equal(pkg.desktopName, pkg.build.appId);
 });
 
 test("tag builds publish checksummed and attested releases", async () => {
