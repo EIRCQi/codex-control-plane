@@ -1,4 +1,4 @@
-.codex-control-plane/
-.DS_Store
-node_modules/
-npm-debug.log*
+/build/icon.png
+/.codex-control-plane/
+/dist/
+/node_modules/
