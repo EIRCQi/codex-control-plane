@@ -16,6 +16,34 @@ const statusLabel = {
 };
 
 const escapeHtml = (value = "") => value.replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+const formatTokens = (value = 0) => Intl.NumberFormat("en", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+const formatDuration = (ms = 0) => ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+
+function renderUsage(runs) {
+  const total = runs.reduce((sum, run) => {
+    const usage = run.usage || {};
+    sum.input += usage.inputTokens || 0;
+    sum.cached += usage.cachedInputTokens || 0;
+    sum.output += usage.outputTokens || 0;
+    sum.tokens += usage.totalTokens || 0;
+    sum.duration += usage.durationMs || 0;
+    if (usage.model) sum.models[usage.model] = (sum.models[usage.model] || 0) + (usage.totalTokens || 0);
+    return sum;
+  }, { input: 0, cached: 0, output: 0, tokens: 0, duration: 0, models: {} });
+  document.querySelector("#total-tokens").textContent = formatTokens(total.tokens);
+  document.querySelector("#input-tokens").textContent = formatTokens(total.input);
+  document.querySelector("#cached-tokens").textContent = `${formatTokens(total.cached)} cached`;
+  document.querySelector("#output-tokens").textContent = formatTokens(total.output);
+  document.querySelector("#agent-time").textContent = formatDuration(total.duration);
+  const denominator = Math.max(1, total.input + total.output);
+  document.querySelector("#input-bar").style.width = `${(Math.max(0, total.input - total.cached) / denominator) * 100}%`;
+  document.querySelector("#cached-bar").style.width = `${(total.cached / denominator) * 100}%`;
+  document.querySelector("#output-bar").style.width = `${(total.output / denominator) * 100}%`;
+  const models = Object.entries(total.models).sort((a, b) => b[1] - a[1]);
+  document.querySelector("#model-list").innerHTML = models.length ? models.map(([model, tokens]) => `<div><span>${escapeHtml(model)}</span><strong>${formatTokens(tokens)} tokens</strong></div>`).join("") : "<p>No model data yet</p>";
+  const rows = runs.filter((run) => run.usage?.totalTokens || run.usage?.durationMs).map((run) => `<tr><td title="${escapeHtml(run.prompt)}">${escapeHtml(run.prompt.slice(0, 42))}</td><td>${escapeHtml(run.usage.model || "—")}</td><td>${formatTokens(run.usage.inputTokens)}</td><td>${formatTokens(run.usage.cachedInputTokens)}</td><td>${formatTokens(run.usage.outputTokens)}</td><td><strong>${formatTokens(run.usage.totalTokens)}</strong></td><td>${formatDuration(run.usage.durationMs)}</td></tr>`).join("");
+  document.querySelector("#usage-rows").innerHTML = rows || '<tr><td colspan="7" class="no-usage">Usage appears after the first Codex response completes.</td></tr>';
+}
 
 async function action(id, type) {
   await fetch(`/api/runs/${id}/${type}`, { method: "POST" });
@@ -61,6 +89,7 @@ function render(runs) {
   document.querySelector("#needs-approval").textContent = approval;
   document.querySelector("#approval-count").textContent = approval;
   document.querySelector("#completed-runs").textContent = runs.filter((run) => run.state === "completed").length;
+  renderUsage(runs);
   document.querySelectorAll(".approve").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "approve")));
   document.querySelectorAll(".reject").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "reject")));
   document.querySelectorAll(".apply").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "apply")));
@@ -76,6 +105,12 @@ async function refresh() {
 document.querySelector("#new-task").addEventListener("click", () => dialog.showModal());
 document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
 document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
+document.querySelectorAll(".nav[data-target]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll(".nav").forEach((nav) => nav.classList.remove("active"));
+  button.classList.add("active");
+  if (button.dataset.target === "top") window.scrollTo({ top: 0, behavior: "smooth" });
+  else document.querySelector(`#${button.dataset.target}`)?.scrollIntoView({ behavior: "smooth" });
+}));
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const error = document.querySelector("#form-error");
