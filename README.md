@@ -14,6 +14,10 @@ A local-first control plane for running Codex against real Git repositories with
 
 The dashboard streams Codex JSON events over Server-Sent Events. Active runs can be cancelled, and failed or cancelled phases can be retried without restarting the whole application.
 
+## Usage monitoring
+
+The local Usage overview reads token counts and model metadata from Codex completion events. It reports input, cached input, output and total tokens, plus measured Codex process runtime per task and in aggregate. It does not estimate dollar cost because ChatGPT-authenticated Codex usage does not map directly to API per-token pricing.
+
 ## Requirements
 
 - Node.js 20+
