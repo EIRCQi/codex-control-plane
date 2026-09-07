@@ -71,7 +71,7 @@ if (args.at(-1).includes('slow')) {
   const historical = await request('/api/runs').then(r=>r.json());
   assert.equal(historical.length, 1); assert.equal(historical[0].mode, 'implement');
   const health = await request('/api/health').then(r=>r.json());
-  assert.equal(health.version, '0.2.0');
+  assert.equal(health.version, JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
   const diagnostics = await request('/api/diagnostics').then(r=>r.json());
   assert.equal(diagnostics.ready, true); assert.equal(diagnostics.codex.version, '1.2.3');
   assert.doesNotMatch(JSON.stringify(diagnostics), /credential-marker/);

@@ -1,3 +1,4 @@
+import { captureView, restoreView, createRunList } from "./live-view.js";
 import { setupEnvironment } from "./environment.js";
 import { agentOutput } from "./run-output.js";
 import { notificationForTransition } from "./notifications.js";
@@ -8,6 +9,8 @@ const dialog = document.querySelector("#task-dialog");
 const form = document.querySelector("#task-form");
 const runDialog = document.querySelector("#run-dialog");
 let currentRuns = [];
+let detailRunId = null;
+let renderedDetailRun = null;
 let projects = [];
 let templates = [];
 const notificationStorageKey = "codex-control-plane.notifications.v1";
@@ -153,24 +156,41 @@ const pendingActions = new Set();
 async function action(id, type) {
   if (pendingActions.has(id)) return false;
   pendingActions.add(id);
+  updatePendingButtons();
   try {
     await checkedFetch(`/api/runs/${id}/${type}`, { method: "POST" });
     document.querySelector("#operation-error").hidden = true;
     await refresh();
     return true;
-  } finally { pendingActions.delete(id); }
+  } finally { pendingActions.delete(id); updatePendingButtons(); }
+}
+
+function updatePendingButtons() {
+  document.querySelectorAll('button[data-id]').forEach((button) => {
+    if (!button.classList.contains('detail-run')) button.disabled = pendingActions.has(button.dataset.id);
+  });
 }
 
 function openRunDetail(run) {
+  if (!run) return;
+  const preserve = runDialog.open && detailRunId === run.id;
+  detailRunId = run.id;
+  renderRunDetail(run, preserve);
+  if (!runDialog.open) runDialog.showModal();
+}
+
+function renderRunDetail(run, preserve = true) {
+  const previous = preserve ? captureView(runDialog) : null;
+  renderedDetailRun = run;
   const usage = run.usage || {};
   document.querySelector("#detail-title").textContent = run.prompt;
   document.querySelector("#run-detail").innerHTML = `
     <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong>${escapeHtml(run.repository)}</strong></div><div><span>Created</span><strong>${new Date(run.createdAt).toLocaleString()}</strong></div></div>
     <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
-    ${run.output ? `<section class="detail-section"><h3>${run.mode === "review" ? "Review report" : "Agent output"}</h3><pre>${escapeHtml(agentOutput(run.output))}</pre></section>` : ""}
+    ${run.output ? `<section class="detail-section"><h3>${run.mode === "review" ? "Review report" : "Agent output"}</h3><pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre></section>` : ""}
     <section class="detail-section"><h3>Event timeline</h3><div class="timeline">${run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join("")}</div></section>
-    ${run.logs?.length ? `<section class="detail-section"><h3>Codex events</h3><div class="log-lines detail-logs">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></section>` : ""}
-    ${run.diff ? `<section class="detail-section"><h3>Generated diff</h3><pre class="diff">${escapeHtml(run.diff)}</pre></section>` : ""}
+    ${run.logs?.length ? `<section class="detail-section"><h3>Codex events</h3><div class="log-lines detail-logs" data-view="detail-logs" data-follow="true">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></section>` : ""}
+    ${run.diff ? `<section class="detail-section"><h3>Generated diff</h3><pre class="diff" data-view="detail-diff">${escapeHtml(run.diff)}</pre></section>` : ""}
     <div class="detail-actions">${terminalStates.has(run.state) ? `<button class="secondary detail-archive" data-id="${run.id}" data-action="${run.archived ? "unarchive" : "archive"}">${run.archived ? "Restore run" : "Archive run"}</button><button class="secondary danger delete-run" data-id="${run.id}">Delete history record</button>` : ""}</div>`;
   document.querySelector(".detail-archive")?.addEventListener("click", async (event) => {
     await action(event.currentTarget.dataset.id, event.currentTarget.dataset.action);
@@ -182,8 +202,11 @@ function openRunDetail(run) {
     runDialog.close();
     await refresh();
   });
-  if (!runDialog.open) runDialog.showModal();
+  if (previous) restoreView(runDialog, previous);
+  else runDialog.scrollTop = 0;
+  updatePendingButtons();
 }
+runDialog.addEventListener("close", () => { detailRunId = null; renderedDetailRun = null; });
 
 function runCard(run) {
   const isReview = run.mode === "review";
@@ -200,16 +223,16 @@ function runCard(run) {
   const mergeApproval = run.state === "awaiting_merge" ? `
     <div class="diff-review">
       <div class="diff-title"><div><strong>Changes are isolated</strong><p>${escapeHtml(run.diffStat || "Review the patch before applying it.")}</p></div><span>Original repo untouched</span></div>
-      <pre class="diff">${escapeHtml(run.diff)}</pre>
+      <pre class="diff" data-view="diff">${escapeHtml(run.diff)}</pre>
       <div class="review-actions"><button class="secondary discard" data-id="${run.id}">Discard changes</button><button class="primary apply" data-id="${run.id}">Apply to repository</button></div>
     </div>` : "";
-  return `<article class="run-card">
+  return `<article class="run-card" data-run-id="${escapeHtml(run.id)}">
     <div class="run-head"><div><span class="status ${run.state}">${statusLabel[run.state]}</span><h3>${escapeHtml(run.prompt)}</h3></div><div class="run-controls"><button class="secondary detail-run" data-id="${run.id}">Details</button>${historyAction}${retryAction}${activeActions}<time>${new Date(run.createdAt).toLocaleString()}</time></div></div>
     <p class="repo"><span class="mode-label">${isReview ? "Read-only review" : "Implementation"}</span> ⌘ ${escapeHtml(run.repository)}</p>
     <div class="steps"><span class="done">1</span><b></b><span class="${run.phase === "implementation" || run.state === "completed" ? "done" : "current"}">2</span><b></b><span class="${run.state === "completed" ? "done" : ""}">3</span></div>
     <div class="step-labels"><span>Queued</span><span>${isReview ? "Review" : "Analyze"}</span><span>${isReview ? "Report" : "Implement"}</span></div>
-    ${run.output ? `<details ${run.state === "awaiting_approval" || (isReview && run.state === "completed") ? "open" : ""}><summary>${isReview ? "Review report" : "Agent output"}</summary><pre>${escapeHtml(agentOutput(run.output))}</pre></details>` : ""}
-    ${run.logs?.length ? `<details class="live-log" ${run.state === "running" ? "open" : ""}><summary><span class="pulse"></span> Live events (${run.logs.length})</summary><div class="log-lines">${run.logs.slice(-100).map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></details>` : ""}
+    ${run.output ? `<details data-view="output-section" ${run.state === "awaiting_approval" || (isReview && run.state === "completed") ? "open" : ""}><summary>${isReview ? "Review report" : "Agent output"}</summary><pre data-view="output">${escapeHtml(agentOutput(run.output))}</pre></details>` : ""}
+    ${run.logs?.length ? `<details class="live-log" data-view="log-section" ${run.state === "running" ? "open" : ""}><summary><span class="pulse"></span> Live events (${run.logs.length})</summary><div class="log-lines" data-view="logs" data-follow="true">${run.logs.slice(-100).map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></details>` : ""}
     ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}
     ${run.state === "queued" ? '<p class="queue-note">Waiting for an available concurrency slot.</p>' : ""}
     ${run.state === "budget_exceeded" ? `<p class="budget-alert">${escapeHtml(run.events.at(-1)?.message || "Budget limit exceeded")}</p>` : ""}
@@ -218,13 +241,26 @@ function runCard(run) {
   </article>`;
 }
 
+const updateRunList = createRunList(runsEl, runCard);
+runsEl.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-id]");
+  if (!button || !runsEl.contains(button) || button.disabled) return;
+  if (button.classList.contains("detail-run")) {
+    openRunDetail(currentRuns.find((run) => run.id === button.dataset.id));
+    return;
+  }
+  const operations = { approve: "approve", reject: "reject", apply: "apply", discard: "discard", "cancel-run": "cancel", "retry-run": "retry", "archive-run": button.dataset.action };
+  const key = Object.keys(operations).find((name) => button.classList.contains(name));
+  if (key) void action(button.dataset.id, operations[key]);
+});
+
 function render(runs) {
   currentRuns = runs;
   const visibleRuns = filteredRuns(runs);
   emptyEl.hidden = visibleRuns.length > 0;
   emptyEl.querySelector("h3").textContent = runs.length ? "No matching runs" : "No runs yet";
   emptyEl.querySelector("p").textContent = runs.length ? "Adjust the search or filters to see more history." : "Create a task to begin with read-only analysis.";
-  runsEl.innerHTML = visibleRuns.map(runCard).join("");
+  updateRunList(visibleRuns);
   document.querySelector("#filter-count").textContent = `${visibleRuns.length} shown`;
   const active = runs.filter((run) => ["queued", "running", "approved"].includes(run.state)).length;
   const approval = runs.filter((run) => ["awaiting_approval", "awaiting_merge"].includes(run.state)).length;
@@ -233,14 +269,12 @@ function render(runs) {
   document.querySelector("#approval-count").textContent = approval;
   document.querySelector("#completed-runs").textContent = runs.filter((run) => run.state === "completed").length;
   renderUsage(runs);
-  document.querySelectorAll(".approve").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "approve")));
-  document.querySelectorAll(".reject").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "reject")));
-  document.querySelectorAll(".apply").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "apply")));
-  document.querySelectorAll(".discard").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "discard")));
-  document.querySelectorAll(".cancel-run").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "cancel")));
-  document.querySelectorAll(".retry-run").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, "retry")));
-  document.querySelectorAll(".archive-run").forEach((button) => button.addEventListener("click", () => action(button.dataset.id, button.dataset.action)));
-  document.querySelectorAll(".detail-run").forEach((button) => button.addEventListener("click", () => openRunDetail(runs.find((run) => run.id === button.dataset.id))));
+  if (runDialog.open && detailRunId) {
+    const selected = runs.find((run) => run.id === detailRunId);
+    if (!selected) runDialog.close();
+    else if (selected !== renderedDetailRun) renderRunDetail(selected);
+  }
+  updatePendingButtons();
 }
 
 async function refresh() {
@@ -367,16 +401,25 @@ document.querySelectorAll(".form-cancel").forEach((button) => button.addEventLis
 document.querySelectorAll("#run-search,#state-filter,#project-filter,#show-archived").forEach((control) => control.addEventListener("input", () => render(currentRuns)));
 document.querySelector("#project-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/projects"));
 document.querySelector("#template-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/templates"));
+let creatingTask = false;
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (creatingTask) return;
   const error = document.querySelector("#form-error");
   error.textContent = "";
   const body = Object.fromEntries(new FormData(form));
-  await checkedFetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  form.reset();
-  syncTaskMode();
-  dialog.close();
-  await refresh();
+  creatingTask = true;
+  document.querySelector("#start-task").disabled = true;
+  try {
+    await checkedFetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    form.reset();
+    syncTaskMode();
+    dialog.close();
+    await refresh();
+  } finally {
+    creatingTask = false;
+    document.querySelector("#start-task").disabled = false;
+  }
 });
 
 let installPrompt = null;

@@ -10,6 +10,7 @@ import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usag
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson } from "./lib/storage.mjs";
 import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
+import { createRunPublisher } from "./lib/live-events.mjs";
 import { startupErrorMessage } from "./lib/startup.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -70,10 +71,13 @@ async function initialize() {
   }
 }
 
-function emitRun(run) {
+function writeRun(run) {
   const payload = `event: run\ndata: ${JSON.stringify(run)}\n\n`;
   for (const client of eventClients) client.write(payload);
 }
+
+const runPublisher = createRunPublisher(writeRun);
+const emitRun = (run) => runPublisher.immediate(run);
 
 async function persist(run) {
   await saveJson(dataFile, [...runs.values()]);
@@ -101,6 +105,7 @@ function repositoryTokens(repository) {
 
 async function jsonBody(req) {
   let raw = "";
+  req.setEncoding("utf8");
   for await (const chunk of req) {
     raw += chunk;
     if (raw.length > 1_000_000) throw new Error("Request body too large");
@@ -132,22 +137,27 @@ async function validateRepository(input) {
 
 function command(commandName, args, cwd, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(commandName, args, { cwd, env: runnerEnv, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
+    const child = spawn(commandName, args, { cwd, env: runnerEnv, windowsHide: true, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
     child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${commandName} exited with code ${code}`)));
-    if (input) child.stdin.end(input);
+    if (input) { child.stdin.on("error", reject); child.stdin.end(input); }
   });
 }
 
 const git = async (cwd, args, input) => command(await resolveTool("git", runtimeSettings, runnerEnv), args, cwd, input);
 
-async function createWorktree(run) {
-  run.baseHead = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
-  run.baseRef = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+async function createWorktree(run, { preserveBaseline = false } = {}) {
+  if (preserveBaseline) requireBaseline(run);
+  else {
+    run.baseHead = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
+    run.baseRef = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+  }
   run.branch = `codex-control-plane/${run.id}`;
   run.worktree = path.join(worktreeRoot, run.id);
   await git(run.repository, ["worktree", "add", "-b", run.branch, run.worktree, run.baseHead]);
@@ -160,6 +170,27 @@ async function cleanupWorktree(run) {
   catch { await rm(run.worktree, { recursive: true, force: true }); }
   try { await git(run.repository, ["branch", "-D", run.branch]); } catch {}
   run.worktree = null;
+}
+
+function requireBaseline(run) {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(run.baseHead || "")) {
+    throw new Error("This older run has no valid repository baseline; discard it and create a new run");
+  }
+}
+
+async function verifyRepositoryBaseline(run) {
+  requireBaseline(run);
+  const head = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
+  const ref = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+  if (head !== run.baseHead || ref !== run.baseRef) throw new Error("Original repository HEAD or branch changed; create a new run");
+  const status = await git(run.repository, ["status", "--porcelain"]);
+  if (status.trim()) throw new Error("Original repository changed during the run; clean it before continuing");
+}
+
+async function resetWorktree(run) {
+  requireBaseline(run);
+  await git(run.worktree, ["reset", "--hard", run.baseHead]);
+  await git(run.worktree, ["clean", "-fd"]);
 }
 
 function stopChild(child) {
@@ -184,6 +215,8 @@ async function executeCodex(run, sandbox, prompt) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     processes.set(run.id, child);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let buffer = "";
     let stderr = "";
@@ -212,7 +245,7 @@ async function executeCodex(run, sandbox, prompt) {
       run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
       if (run.logs.length > 500) run.logs.splice(0, run.logs.length - 500);
       run.updatedAt = new Date().toISOString();
-      emitRun(run);
+      runPublisher.schedule(run);
     };
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
@@ -272,9 +305,11 @@ async function implement(run) {
       "workspace-write",
       `${run.prompt}\n\nImplement the requested change. Work only inside this repository. Run relevant tests and summarize the changes.`,
     )}`;
+    requireBaseline(run);
     await git(run.worktree, ["add", "-N", "."]);
-    const diffStat = await git(run.worktree, ["diff", "--stat"]);
-    const diff = await git(run.worktree, ["diff", "--no-ext-diff", "--no-color", "--binary"]);
+    const diffOptions = ["--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/"];
+    const diffStat = await git(run.worktree, ["diff", ...diffOptions, "--stat", run.baseHead, "--"]);
+    const diff = await git(run.worktree, ["diff", ...diffOptions, "--binary", run.baseHead, "--"]);
     if (!diff.trim()) {
       await cleanupWorktree(run);
       transition(run, "completed", "Implementation completed with no file changes");
@@ -284,8 +319,7 @@ async function implement(run) {
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Implementation failed", { error: error.message });
     else if (run.worktree) {
-      await git(run.worktree, ["reset", "--hard", "HEAD"]);
-      await git(run.worktree, ["clean", "-fd"]);
+      await resetWorktree(run);
     }
   }
   await persist(run);
@@ -293,12 +327,7 @@ async function implement(run) {
 
 async function applyChanges(run) {
   if (run.state !== "awaiting_merge") throw new Error("Run is not awaiting change approval");
-  if (!run.baseHead) throw new Error("This older run has no repository baseline; discard it and create a new run");
-  const head = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
-  const ref = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
-  if (head !== run.baseHead || ref !== run.baseRef) throw new Error("Original repository HEAD or branch changed; create a new run");
-  const status = await git(run.repository, ["status", "--porcelain"]);
-  if (status.trim()) throw new Error("Original repository changed during the run; clean it before applying");
+  await verifyRepositoryBaseline(run);
   await git(run.repository, ["apply", "--check", "--index", "-"], run.diff);
   await git(run.repository, ["apply", "--index", "--whitespace=nowarn", "-"], run.diff);
   applyRun(run);
@@ -335,9 +364,13 @@ async function retry(run) {
   if (draft.phase === "analysis") {
     await cleanupWorktree(run);
   } else {
-    if (!run.worktree) await createWorktree(run);
-    await git(run.worktree, ["reset", "--hard", "HEAD"]);
-    await git(run.worktree, ["clean", "-fd"]);
+    await verifyRepositoryBaseline(run);
+    if (run.worktree) {
+      try { await access(path.join(run.worktree, ".git")); }
+      catch (error) { if (error.code !== "ENOENT") throw error; await cleanupWorktree(run); }
+    }
+    if (!run.worktree) await createWorktree(run, { preserveBaseline: true });
+    await resetWorktree(run);
   }
   prepareRetry(run);
   run.state = run.phase === "analysis" ? "queued" : "approved";
@@ -598,6 +631,7 @@ export function shutdown() {
     for (const child of processes.values()) stopChild(child);
     await Promise.allSettled([...jobs]);
     if (ready) await persist();
+    runPublisher.clear();
   })();
   return shutdownPromise;
 }
