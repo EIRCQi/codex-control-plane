@@ -9,6 +9,7 @@ import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, p
 import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson } from "./lib/storage.mjs";
+import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
 import { startupErrorMessage } from "./lib/startup.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,11 @@ const dataDir = process.env.CODEX_CONTROL_PLANE_DATA_DIR || path.join(root, ".co
 const dataFile = path.join(dataDir, "runs.json");
 const settingsFile = path.join(dataDir, "settings.json");
 const projectsFile = path.join(dataDir, "projects.json");
+const runtimeFile = path.join(dataDir, "runtime.json");
+const appVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
+const runnerEnv = runtimeEnvironment();
+let runtimeSettings = { ...runtimeDefaults };
+let diagnosticsPromise = null;
 const templatesFile = path.join(dataDir, "templates.json");
 const port = Number(process.env.PORT || 4310);
 const worktreeRoot = path.join(os.tmpdir(), "codex-control-plane-worktrees");
@@ -38,9 +44,11 @@ async function initialize() {
   settings = { ...defaultSettings, ...await loadJson(settingsFile, {}, (v) => v && !Array.isArray(v) && typeof v === "object") };
   for (const project of await loadJson(projectsFile, [], Array.isArray)) projects.set(project.id, project);
   customTemplates = await loadJson(templatesFile, [], Array.isArray);
+  runtimeSettings = validateRuntimeSettings(await loadJson(runtimeFile, runtimeDefaults));
   {
     const saved = await loadJson(dataFile, [], Array.isArray);
     for (const run of saved) {
+      run.mode ||= "implement";
       run.logs ||= [];
       run.events ||= [];
       run.retries ||= 0;
@@ -124,7 +132,7 @@ async function validateRepository(input) {
 
 function command(commandName, args, cwd, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(commandName, args, { cwd, env: process.env, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
+    const child = spawn(commandName, args, { cwd, env: runnerEnv, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -135,7 +143,7 @@ function command(commandName, args, cwd, input) {
   });
 }
 
-const git = (cwd, args, input) => command("git", args, cwd, input);
+const git = async (cwd, args, input) => command(await resolveTool("git", runtimeSettings, runnerEnv), args, cwd, input);
 
 async function createWorktree(run) {
   run.baseHead = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
@@ -163,13 +171,16 @@ function stopChild(child) {
   child.once("close", () => clearTimeout(child.stopTimer));
 }
 
-function executeCodex(run, sandbox, prompt) {
+async function executeCodex(run, sandbox, prompt) {
+  const executable = await resolveTool("codex", runtimeSettings, runnerEnv);
+  if (run.cancelRequested || stopping) throw new Error("Run cancelled");
+  if (run.mode === "review" && sandbox !== "read-only") throw new Error("Read-only reviews cannot request write access");
   return new Promise((resolve, reject) => {
     const executionSeq = ++run.executionSeq;
     const startedAt = Date.now();
-    const child = spawn("codex", ["exec", "--sandbox", sandbox, "--json", prompt], {
+    const child = spawn(executable, ["exec", "--sandbox", sandbox, "--json", prompt], {
       cwd: run.worktree,
-      env: process.env,
+      env: runnerEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     processes.set(run.id, child);
@@ -231,15 +242,18 @@ async function analyze(run) {
   try {
     run.queuedAction = null;
     await createWorktree(run);
-    transition(run, "running", "Read-only analysis started");
+    transition(run, "running", run.mode === "review" ? "Read-only review started" : "Read-only analysis started");
     await persist(run);
     if (run.cancelRequested || stopping) throw new Error("Run cancelled");
     run.output = await executeCodex(
       run,
       "read-only",
-      `${run.prompt}\n\nAnalyze the repository and propose a concrete implementation plan. Do not modify files. End with a concise list of files you expect to change.`,
+      run.mode === "review" ? `${run.prompt}\n\nReview only. Do not modify files. Report concrete findings with severity, file references and suggested next steps.` : `${run.prompt}\n\nAnalyze the repository and propose a concrete implementation plan. Do not modify files. End with a concise list of files you expect to change.`,
     );
-    requestWriteApproval(run);
+    if (run.mode === "review") {
+      await cleanupWorktree(run);
+      transition(run, "completed", "Read-only review complete");
+    } else requestWriteApproval(run);
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Analysis failed", { error: error.message });
     else await cleanupWorktree(run);
@@ -333,8 +347,32 @@ async function retry(run) {
 }
 
 async function api(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/diagnostics") {
+    if (!diagnosticsPromise) {
+      const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion })
+        .finally(() => { if (diagnosticsPromise === pending) diagnosticsPromise = null; });
+      diagnosticsPromise = pending;
+    }
+    return send(res, 200, await diagnosticsPromise);
+  }
+  if (req.method === "GET" && url.pathname === "/api/runtime") {
+    return send(res, 200, { ...runtimeSettings, overrides: {
+      gitPath: Boolean(runnerEnv.CODEX_CONTROL_PLANE_GIT_BIN), codexPath: Boolean(runnerEnv.CODEX_CONTROL_PLANE_CODEX_BIN),
+    } });
+  }
+  if (req.method === "PUT" && url.pathname === "/api/runtime") {
+    if ([...runs.values()].some((run) => !terminalStates.has(run.state) || run.starting)) throw new Error("Finish or cancel pending runs before changing executable paths");
+    const next = validateRuntimeSettings(await jsonBody(req));
+    for (const key of ["gitPath", "codexPath"]) {
+      if (next[key]) await resolveTool(key === "gitPath" ? "git" : "codex", next, { ...runnerEnv, CODEX_CONTROL_PLANE_GIT_BIN: '', CODEX_CONTROL_PLANE_CODEX_BIN: '' });
+    }
+    await saveJson(runtimeFile, next);
+    runtimeSettings = next;
+    diagnosticsPromise = null;
+    return send(res, 200, next);
+  }
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return send(res, 200, { ready, activeRuns: processes.size });
+    return send(res, 200, { ready, version: appVersion, activeRuns: processes.size });
   }
   if (req.method === "GET" && url.pathname === "/api/events") {
     res.writeHead(200, {
@@ -433,12 +471,15 @@ async function api(req, res, url) {
     if (!body.prompt?.trim()) throw new Error("Task description is required");
     const template = body.templateId ? allTemplates().find((item) => item.id === body.templateId) : null;
     if (body.templateId && !template) throw new Error("Template not found");
+    const mode = template?.mode === "review" ? "review" : (body.mode || "implement");
+    if (!["implement", "review"].includes(mode)) throw new Error("Unsupported task mode");
+    await resolveTool("codex", runtimeSettings, runnerEnv);
     const prompt = renderTemplate(template, body.prompt);
     const used = repositoryTokens(repository);
     if (settings.maxTokensPerRepository > 0 && used >= settings.maxTokensPerRepository) {
       throw new Error(`Repository token quota reached (${used.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`);
     }
-    const run = createRun({ id: randomUUID(), repository, prompt, projectId: project?.id, templateId: template?.id });
+    const run = createRun({ id: randomUUID(), repository, prompt, mode, projectId: project?.id, templateId: template?.id });
     runs.set(run.id, run);
     if (project) {
       project.lastUsedAt = new Date().toISOString();
@@ -453,6 +494,7 @@ async function api(req, res, url) {
     const run = runs.get(match[1]);
     if (!run) return send(res, 404, { error: "Run not found" });
     if (run.starting && match[2] !== "cancel") throw new Error("Run is still active or stopping; try again shortly");
+    if (run.mode === "review" && ["approve", "apply"].includes(match[2])) throw new Error("Read-only reviews cannot request write access");
     if (match[2] === "archive" || match[2] === "unarchive") {
       if (!terminalStates.has(run.state)) throw new Error("Only finished runs can be archived");
       run.archived = match[2] === "archive";
@@ -505,7 +547,7 @@ export const controlServer = createServer(async (req, res) => {
       const run = runs.get(id);
       const mutating = !["GET", "HEAD"].includes(req.method);
       const key = mutating ? (run ? `repo:${run.repository}` : url.pathname) : null;
-      if (key && actionLocks.has(key)) return send(res, 409, { error: "Another operation is in progress; try again shortly" });
+      if (key && (actionLocks.has(key) || (actionLocks.has("/api/runtime") && url.pathname !== "/api/runtime") || (url.pathname === "/api/runtime" && actionLocks.size))) return send(res, 409, { error: "Another operation is in progress; try again shortly" });
       if (key) actionLocks.add(key);
       let handled;
       try { handled = await api(req, res, url); }

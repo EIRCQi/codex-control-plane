@@ -19,13 +19,14 @@
         <button class="nav" data-target="catalog-panel">◇ <span>Projects & templates</span></button>
         <button class="nav" id="approvals-nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
         <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
+        <button class="nav" data-target="environment-panel">◈ <span>Environment</span></button>
         <button class="nav" data-target="budget-settings">⚙ <span>Settings</span></button>
       </nav>
       <div class="local-status"><i></i><div><strong>Local runner</strong><small>Connected</small></div></div>
     </aside>
     <main>
       <header>
-        <div><p class="eyebrow">LOCAL WORKSPACE</p><h1>Mission Control</h1></div>
+        <div><p class="eyebrow">LOCAL WORKSPACE <span id="app-version"></span></p><h1>Mission Control</h1></div>
         <div class="header-actions">
           <button class="secondary install-app" id="install-app" type="button" hidden>Install app</button>
           <button class="notification-button" id="notification-button" type="button" aria-label="Open notifications" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
@@ -49,6 +50,20 @@
         <article><span>Needs approval</span><strong id="needs-approval">0</strong><small>Write access blocked</small></article>
         <article><span>Completed</span><strong id="completed-runs">0</strong><small>This workspace</small></article>
         <article><span>Security mode</span><strong class="safe">Safe</strong><small>Approval required</small></article>
+      </section>
+      <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
+        <div class="panel-title"><div><p class="eyebrow">GET READY</p><h2 id="environment-title">Environment</h2></div><button class="secondary" id="refresh-environment" type="button">Check again</button></div>
+        <div class="environment-overview"><strong class="environment-summary" id="environment-summary">Waiting for local runner</strong><small id="environment-meta"></small></div>
+        <div class="environment-checks" id="environment-checks"></div>
+        <details class="runtime-options"><summary>Configure executable paths</summary>
+          <p>Leave paths empty for automatic detection. Finish or cancel pending tasks before changing paths. On Windows, select native .exe files.</p>
+          <form id="runtime-settings">
+            <label>Git executable<input name="gitPath" spellcheck="false" placeholder="Automatic detection" /><small id="gitPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_GIT_BIN. Restart the runner after changing that environment variable.</small></label>
+            <label>Codex executable<input name="codexPath" spellcheck="false" placeholder="Automatic detection" /><small id="codexPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_CODEX_BIN. Restart the runner after changing that environment variable.</small></label>
+            <button class="primary">Save &amp; check</button>
+          </form>
+        </details>
+        <p id="environment-status" class="environment-status" role="status" aria-live="polite"></p>
       </section>
       <section class="panel">
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
@@ -117,9 +132,10 @@
         <div class="dialog-head"><div><p class="eyebrow">NEW RUN</p><h2>Give Codex a task</h2></div><button type="button" class="icon" id="close-dialog">×</button></div>
         <label>Project<select name="projectId" required id="task-project"><option value="">Register a project first</option></select></label>
         <label>Template<select name="templateId" id="task-template"><option value="">No template</option></select></label>
+        <label>Task mode<select name="mode" id="task-mode"><option value="implement">Analyze, then implement with approval</option><option value="review">Read-only review</option></select></label>
         <label>Task details<textarea name="prompt" required rows="5" placeholder="Describe the change and expected outcome…"></textarea></label>
-        <div class="policy"><span>◉</span><div><strong>Protected execution</strong><p>Analysis runs read-only. You must approve before Codex can modify files.</p></div></div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary">Start analysis</button></div>
+        <div class="policy"><span>◉</span><div><strong id="task-policy-title">Protected execution</strong><p id="task-policy-text">Analysis runs read-only. You must approve before Codex can modify files.</p></div></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary" id="start-task">Start analysis</button></div>
         <p id="form-error" class="error"></p>
       </form>
     </dialog>

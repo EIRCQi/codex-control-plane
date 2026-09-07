@@ -1,5 +1,5 @@
-const cacheName = "codex-control-plane-shell-v2";
-const shell = ["/", "/styles.css", "/app.js", "/notifications.js", "/manifest.webmanifest", "/icon.svg"];
+const cacheName = "codex-control-plane-shell-v3";
+const shell = ["/", "/styles.css", "/app.js", "/notifications.js", "/environment.js", "/run-output.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(cacheName).then((cache) => cache.addAll(shell)));

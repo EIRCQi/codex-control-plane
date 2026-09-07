@@ -1,3 +1,5 @@
+import { setupEnvironment } from "./environment.js";
+import { agentOutput } from "./run-output.js";
 import { notificationForTransition } from "./notifications.js";
 
 const runsEl = document.querySelector("#runs");
@@ -146,6 +148,7 @@ window.addEventListener("unhandledrejection", (event) => {
   showError(event.reason?.message || "Operation failed. Please try again.");
   event.preventDefault();
 });
+const environment = setupEnvironment({ request: checkedFetch, escapeHtml });
 const pendingActions = new Set();
 async function action(id, type) {
   if (pendingActions.has(id)) return false;
@@ -164,6 +167,7 @@ function openRunDetail(run) {
   document.querySelector("#run-detail").innerHTML = `
     <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong>${escapeHtml(run.repository)}</strong></div><div><span>Created</span><strong>${new Date(run.createdAt).toLocaleString()}</strong></div></div>
     <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
+    ${run.output ? `<section class="detail-section"><h3>${run.mode === "review" ? "Review report" : "Agent output"}</h3><pre>${escapeHtml(agentOutput(run.output))}</pre></section>` : ""}
     <section class="detail-section"><h3>Event timeline</h3><div class="timeline">${run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join("")}</div></section>
     ${run.logs?.length ? `<section class="detail-section"><h3>Codex events</h3><div class="log-lines detail-logs">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></section>` : ""}
     ${run.diff ? `<section class="detail-section"><h3>Generated diff</h3><pre class="diff">${escapeHtml(run.diff)}</pre></section>` : ""}
@@ -182,6 +186,7 @@ function openRunDetail(run) {
 }
 
 function runCard(run) {
+  const isReview = run.mode === "review";
   const activeActions = ["queued", "running", "approved"].includes(run.state)
     ? `<button class="secondary danger cancel-run" data-id="${run.id}">Cancel run</button>` : "";
   const retryAction = ["failed", "cancelled", "budget_exceeded"].includes(run.state)
@@ -200,10 +205,10 @@ function runCard(run) {
     </div>` : "";
   return `<article class="run-card">
     <div class="run-head"><div><span class="status ${run.state}">${statusLabel[run.state]}</span><h3>${escapeHtml(run.prompt)}</h3></div><div class="run-controls"><button class="secondary detail-run" data-id="${run.id}">Details</button>${historyAction}${retryAction}${activeActions}<time>${new Date(run.createdAt).toLocaleString()}</time></div></div>
-    <p class="repo">⌘ ${escapeHtml(run.repository)}</p>
-    <div class="steps"><span class="done">1</span><b></b><span class="${run.phase === "implementation" ? "done" : "current"}">2</span><b></b><span class="${run.state === "completed" ? "done" : ""}">3</span></div>
-    <div class="step-labels"><span>Queued</span><span>Analyze</span><span>Implement</span></div>
-    ${run.output ? `<details ${run.state === "awaiting_approval" ? "open" : ""}><summary>Agent output</summary><pre>${escapeHtml(run.output)}</pre></details>` : ""}
+    <p class="repo"><span class="mode-label">${isReview ? "Read-only review" : "Implementation"}</span> ⌘ ${escapeHtml(run.repository)}</p>
+    <div class="steps"><span class="done">1</span><b></b><span class="${run.phase === "implementation" || run.state === "completed" ? "done" : "current"}">2</span><b></b><span class="${run.state === "completed" ? "done" : ""}">3</span></div>
+    <div class="step-labels"><span>Queued</span><span>${isReview ? "Review" : "Analyze"}</span><span>${isReview ? "Report" : "Implement"}</span></div>
+    ${run.output ? `<details ${run.state === "awaiting_approval" || (isReview && run.state === "completed") ? "open" : ""}><summary>${isReview ? "Review report" : "Agent output"}</summary><pre>${escapeHtml(agentOutput(run.output))}</pre></details>` : ""}
     ${run.logs?.length ? `<details class="live-log" ${run.state === "running" ? "open" : ""}><summary><span class="pulse"></span> Live events (${run.logs.length})</summary><div class="log-lines">${run.logs.slice(-100).map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></details>` : ""}
     ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ""}
     ${run.state === "queued" ? '<p class="queue-note">Waiting for an available concurrency slot.</p>' : ""}
@@ -274,6 +279,7 @@ async function loadCatalog() {
     checkedFetch("/api/templates").then((response) => response.json()),
   ]);
   renderCatalog();
+  syncTaskMode();
 }
 
 async function submitCatalogForm(event, endpoint) {
@@ -286,6 +292,18 @@ async function submitCatalogForm(event, endpoint) {
   message.textContent = "";
   await loadCatalog();
 }
+
+function syncTaskMode() {
+  const mode = document.querySelector("#task-mode");
+  const reviewTemplate = templates.find((item) => item.id === document.querySelector("#task-template").value)?.mode === "review";
+  if (reviewTemplate) mode.value = "review";
+  mode.disabled = reviewTemplate;
+  const isReview = mode.value === "review";
+  document.querySelector("#task-policy-title").textContent = isReview ? "Read-only review" : "Protected execution";
+  document.querySelector("#task-policy-text").textContent = isReview ? "Codex reviews an isolated snapshot and returns a report. This task cannot request write access." : "Analysis runs read-only. You must approve before Codex can modify files.";
+  document.querySelector("#start-task").textContent = isReview ? "Start review" : "Start analysis";
+}
+document.querySelectorAll("#task-mode,#task-template").forEach((control) => control.addEventListener("change", syncTaskMode));
 
 document.querySelector("#new-task").addEventListener("click", () => {
   if (!projects.length) {
@@ -356,6 +374,7 @@ form.addEventListener("submit", async (event) => {
   const body = Object.fromEntries(new FormData(form));
   await checkedFetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   form.reset();
+  syncTaskMode();
   dialog.close();
   await refresh();
 });
@@ -411,7 +430,7 @@ renderNotifications();
 const events = new EventSource("/api/events");
 events.onopen = () => {
   connectionStatus(true);
-  void Promise.all([loadSettings(), loadCatalog()]).catch(() => {});
+  void Promise.all([loadSettings(), loadCatalog(), environment.refresh()]).catch(() => {});
 };
 events.addEventListener("snapshot", (event) => {
   const snapshot = JSON.parse(event.data);

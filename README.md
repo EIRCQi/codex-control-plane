@@ -1,8 +1,8 @@
 # Codex Control Plane
 
-A local-first control plane for running Codex against real Git repositories with an explicit approval gate before any file writes.
+A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
 
-## MVP workflow
+## Implementation workflow
 
 1. Select a local Git repository and describe a task.
 2. Codex analyzes it in `read-only` sandbox mode.
@@ -13,6 +13,34 @@ A local-first control plane for running Codex against real Git repositories with
 7. Apply the patch to the original working tree or discard the isolated worktree completely.
 
 The dashboard streams Codex JSON events over Server-Sent Events. Active runs can be cancelled, and failed or cancelled phases can be retried without restarting the whole application.
+
+## v0.2.0: setup diagnostics and read-only reviews
+
+The **Environment** panel checks Git, Codex CLI, local credential status and the task-data directory. It shows the resolved executable paths, versions and actionable setup hints. **Check again** reruns the checks after you fix a missing tool or complete login in a terminal.
+
+The same checks run without starting the server or installing Electron:
+
+```bash
+npm run doctor
+# Machine-readable output
+node scripts/doctor.mjs --json
+```
+
+A successful local check exits with code `0`; missing tools, an unconfirmed login or inaccessible storage produce code `1`. The check uses `codex --version` and `codex login status`, has bounded output and timeouts, and does not return raw authentication output. Login status confirms locally stored credentials; it does not validate service connectivity, quota or a future model request. See the [official Codex command reference](https://learn.chatgpt.com/docs/developer-commands).
+
+If desktop launch cannot find a tool, expand **Configure executable paths** and enter its absolute path. Empty values use automatic detection, including common macOS Homebrew and local-bin locations. Save paths after pending tasks have finished, been rejected or discarded, or cancelled. No application restart is needed for saved paths. Environment variables `CODEX_CONTROL_PLANE_GIT_BIN` and `CODEX_CONTROL_PLANE_CODEX_BIN` take precedence over saved paths and require restarting the runner after changes. On Windows, select the native `git.exe` and `codex.exe`; `.cmd` and `.bat` wrappers are not supported. The app executes tools directly without interpolating task text into a shell.
+
+Select **Read-only review** in a new task, or choose the built-in **Code review** template. Codex reviews the committed repository snapshot in an isolated worktree with `--sandbox read-only`, returns a report, and the task completes without requesting write access. The worktree is cleaned up after a successful review. Review tasks cannot be approved for implementation or applied to the source repository, including after a retry. Reports display completed agent messages while preserving the original event history.
+
+To upgrade from 0.1.0, finish or stop active work, quit the existing runner, pull the code and start it again:
+
+```bash
+git pull --ff-only
+npm run doctor
+npm start
+```
+
+The dashboard can open even if the doctor reports a missing Codex setup; configure it before starting a task. Existing projects, templates, budgets and history remain in place. Saved runs without a task mode retain the implementation workflow. Runtime paths are stored in `runtime.json` alongside other app data. Source/browser mode uses `.codex-control-plane/`; packaged desktop mode uses the directory shown in the Environment panel. To diagnose that directory from the source checkout, set `CODEX_CONTROL_PLANE_DATA_DIR` to the displayed path. If the browser shows an update notification, use **Reload** to load the new interface.
 
 ## Usage monitoring
 
@@ -66,7 +94,7 @@ Open <http://127.0.0.1:4310>.
 
 If port `4310` is already occupied, the desktop app or another local Runner may already be active. Open the URL first, inspect the listener with `lsof -nP -iTCP:4310 -sTCP:LISTEN`, or start an independent instance with `PORT=4311 npm start`.
 
-Run the state-machine tests with:
+Run the runtime, state-machine and simulated-Codex integration tests with:
 
 ```bash
 npm test

@@ -67,3 +67,19 @@ test("a budget-limited run stops and can retry after settings change", () => {
   assert.equal(run.state, "queued");
   assert.equal(run.budgetExceeded, false);
 });
+
+
+test("read-only tasks cannot enter write approvals or apply changes", () => {
+  const run = createRun({ id: "review", repository: "/tmp/repo", prompt: "Review", mode: "review" });
+  transition(run, "running", "Reviewing");
+  assert.throws(() => requestWriteApproval(run), /Read-only/);
+  run.state = "awaiting_approval";
+  assert.throws(() => approveRun(run), /Read-only/);
+  run.state = "running"; run.phase = "implementation";
+  assert.throws(() => requestMergeApproval(run, {diff:"", diffStat:""}), /Read-only/);
+  run.state = "awaiting_merge";
+  assert.throws(() => applyRun(run), /Read-only/);
+  run.state = "failed";
+  prepareRetry(run);
+  assert.equal(run.phase, "analysis");
+});

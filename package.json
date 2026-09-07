@@ -1,6 +1,6 @@
 {
   "name": "codex-control-plane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A local-first control plane for visible, controlled and recoverable Codex runs.",
   "author": {
     "name": "EIRCQi",
@@ -20,7 +20,8 @@
     "prepack": "npm run prepare-assets",
     "prepare-assets": "node scripts/generate-icon.mjs",
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "doctor": "node scripts/doctor.mjs"
   },
   "devDependencies": {
     "electron": "^39.0.0",

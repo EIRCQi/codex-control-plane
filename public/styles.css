@@ -37,3 +37,22 @@ select { width:100%; padding:11px 12px; color:var(--text); background:#0b1118; b
 .operation-error { color:var(--red); border-color:var(--red); }
 [hidden] { display:none !important; }
 button:disabled { opacity:.5; cursor:wait; }
+
+#app-version { margin-left:8px; color:var(--cyan); letter-spacing:0; }
+.environment-panel { margin-bottom:24px; border:1px solid var(--line); border-radius:12px; background:var(--panel); overflow:hidden; }
+.environment-overview { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; padding:0 20px 16px; }
+.environment-overview small { color:var(--muted); }
+.environment-summary { font-size:13px; }.ok { color:var(--cyan); }.attention { color:var(--amber); }
+.environment-checks { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; padding:0 20px 18px; }
+.environment-checks article { min-width:0; padding:13px; border:1px solid var(--line); border-radius:9px; background:#0b1117; }
+.environment-checks article>div { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px; margin-bottom:8px; }
+.environment-checks h3 { font-size:13px; }.check-status { font-size:11px; }
+.environment-checks code { display:block; color:#b2c3d5; margin:8px 0; font-size:11px; overflow-wrap:anywhere; }
+.environment-checks p,.runtime-options>p,.runtime-options small { color:var(--muted); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.runtime-options { padding:14px 20px; border-top:1px solid var(--line); }.runtime-options>p { margin:10px 0; }
+#runtime-settings { display:grid; grid-template-columns:1fr 1fr auto; align-items:end; gap:12px; }
+#runtime-settings label { margin:0; min-width:0; }#runtime-settings input[readonly] { opacity:.6; }
+.environment-status { color:var(--amber); padding:0 20px 14px; font-size:12px; }.environment-status:empty { display:none; }
+.mode-label { display:inline-block; margin-right:8px; color:var(--cyan); }
+@media(max-width:1100px) { .environment-checks { grid-template-columns:repeat(2,minmax(0,1fr)); } #runtime-settings { grid-template-columns:1fr; } }
+@media(max-width:500px) { .environment-checks { grid-template-columns:1fr; } }
