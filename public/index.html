@@ -17,7 +17,7 @@
       <nav>
         <button class="nav active" data-target="top">⌁ <span>Mission Control</span></button>
         <button class="nav" data-target="catalog-panel">◇ <span>Projects & templates</span></button>
-        <button class="nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
+        <button class="nav" id="approvals-nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
         <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
         <button class="nav" data-target="budget-settings">⚙ <span>Settings</span></button>
       </nav>
@@ -42,6 +42,8 @@
           </div>
         </div>
       </header>
+      <p id="connection-banner" class="connection-banner" role="status">Connecting to local Runner… If it is stopped, run npm start and leave it running.</p>
+      <p id="operation-error" class="operation-error" role="alert" hidden></p>
       <section class="metrics">
         <article><span>Active runs</span><strong id="active-runs">0</strong><small>Right now</small></article>
         <article><span>Needs approval</span><strong id="needs-approval">0</strong><small>Write access blocked</small></article>
@@ -52,7 +54,7 @@
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
         <div class="run-filters">
           <input id="run-search" type="search" placeholder="Search tasks or repositories…" />
-          <select id="state-filter"><option value="">All states</option><option value="active">Active</option><option value="awaiting_approval">Needs approval</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
+          <select id="state-filter"><option value="">All states</option><option value="active">Active</option><option value="approvals">All approvals</option><option value="awaiting_approval">Write approval</option><option value="awaiting_merge">Review changes</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
           <select id="project-filter"><option value="">All projects</option></select>
           <label class="archive-toggle"><input id="show-archived" type="checkbox" /> Show archived</label>
           <span id="filter-count"></span>

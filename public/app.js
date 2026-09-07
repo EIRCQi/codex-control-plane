@@ -12,6 +12,8 @@ const notificationStorageKey = "codex-control-plane.notifications.v1";
 const notificationPreferenceKey = "codex-control-plane.notification-preferences.v1";
 let notifications = readLocal(notificationStorageKey, []);
 let notificationPreferences = readLocal(notificationPreferenceKey, { approvals: true, results: true });
+if (!Array.isArray(notifications)) notifications = [];
+if (!notificationPreferences || typeof notificationPreferences !== "object") notificationPreferences = { approvals: true, results: true };
 const statusLabel = {
   queued: "Queued",
   running: "Running",
@@ -35,7 +37,7 @@ function readLocal(key, fallback) {
 }
 
 function writeLocal(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* UI remains usable if storage is unavailable. */ }
 }
 
 function renderNotifications() {
@@ -71,8 +73,10 @@ function addNotification(notification) {
   renderNotifications();
   const allowed = notification.kind === "approval" ? notificationPreferences.approvals : notificationPreferences.results;
   if (allowed && window.Notification && Notification.permission === "granted") {
-    const desktop = new Notification(notification.title, { body: notification.task, tag: notification.id });
-    desktop.onclick = () => { window.focus(); const run = currentRuns.find((item) => item.id === notification.runId); if (run) openRunDetail(run); desktop.close(); };
+    try {
+      const desktop = new Notification(notification.title, { body: notification.task, tag: notification.id });
+      desktop.onclick = () => { window.focus(); const run = currentRuns.find((item) => item.id === notification.runId); if (run) openRunDetail(run); desktop.close(); };
+    } catch { /* In-app notifications still work when desktop alerts are unavailable. */ }
   }
 }
 
@@ -86,7 +90,8 @@ function filteredRuns(runs) {
     if (query && !`${run.prompt} ${run.repository}`.toLowerCase().includes(query)) return false;
     if (projectId && run.projectId !== projectId) return false;
     if (state === "active" && !["queued", "running", "approved"].includes(run.state)) return false;
-    if (state && state !== "active" && run.state !== state) return false;
+    if (state === "approvals" && !["awaiting_approval", "awaiting_merge"].includes(run.state)) return false;
+    if (state && !["active", "approvals"].includes(state) && run.state !== state) return false;
     return true;
   });
 }
@@ -117,9 +122,40 @@ function renderUsage(runs) {
   document.querySelector("#usage-rows").innerHTML = rows || '<tr><td colspan="7" class="no-usage">Usage appears after the first Codex response completes.</td></tr>';
 }
 
+function showError(message) {
+  const banner = document.querySelector("#operation-error");
+  banner.textContent = message;
+  banner.hidden = false;
+  if (dialog.open) document.querySelector("#form-error").textContent = message;
+}
+
+async function checkedFetch(url, options) {
+  try {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `Request failed (${response.status})`);
+    }
+    return response;
+  } catch (error) {
+    showError(error.message === "Failed to fetch" ? "Runner unavailable. Start it, then try again." : error.message);
+    throw error;
+  }
+}
+window.addEventListener("unhandledrejection", (event) => {
+  showError(event.reason?.message || "Operation failed. Please try again.");
+  event.preventDefault();
+});
+const pendingActions = new Set();
 async function action(id, type) {
-  await fetch(`/api/runs/${id}/${type}`, { method: "POST" });
-  await refresh();
+  if (pendingActions.has(id)) return false;
+  pendingActions.add(id);
+  try {
+    await checkedFetch(`/api/runs/${id}/${type}`, { method: "POST" });
+    document.querySelector("#operation-error").hidden = true;
+    await refresh();
+    return true;
+  } finally { pendingActions.delete(id); }
 }
 
 function openRunDetail(run) {
@@ -138,11 +174,11 @@ function openRunDetail(run) {
   });
   document.querySelector(".delete-run")?.addEventListener("click", async (event) => {
     if (!window.confirm("Delete this control-plane history record? Repository files will not be touched.")) return;
-    await fetch(`/api/runs/${event.currentTarget.dataset.id}`, { method: "DELETE" });
+    await checkedFetch(`/api/runs/${event.currentTarget.dataset.id}`, { method: "DELETE" });
     runDialog.close();
     await refresh();
   });
-  runDialog.showModal();
+  if (!runDialog.open) runDialog.showModal();
 }
 
 function runCard(run) {
@@ -203,11 +239,11 @@ function render(runs) {
 }
 
 async function refresh() {
-  render(await fetch("/api/runs").then((r) => r.json()));
+  render(await checkedFetch("/api/runs").then((r) => r.json()));
 }
 
 async function loadSettings() {
-  const settings = await fetch("/api/settings").then((response) => response.json());
+  const settings = await checkedFetch("/api/settings").then((response) => response.json());
   const settingsForm = document.querySelector("#budget-settings");
   for (const [key, value] of Object.entries(settings)) {
     if (settingsForm.elements[key]) settingsForm.elements[key].value = value;
@@ -223,19 +259,19 @@ function renderCatalog() {
   document.querySelector("#project-filter").innerHTML = '<option value="">All projects</option>' + projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("");
   document.querySelector("#project-filter").value = selectedProjectFilter;
   document.querySelectorAll(".delete-project").forEach((button) => button.addEventListener("click", async () => {
-    await fetch(`/api/projects/${button.dataset.id}`, { method: "DELETE" });
+    await checkedFetch(`/api/projects/${button.dataset.id}`, { method: "DELETE" });
     await loadCatalog();
   }));
   document.querySelectorAll(".delete-template").forEach((button) => button.addEventListener("click", async () => {
-    await fetch(`/api/templates/${button.dataset.id}`, { method: "DELETE" });
+    await checkedFetch(`/api/templates/${button.dataset.id}`, { method: "DELETE" });
     await loadCatalog();
   }));
 }
 
 async function loadCatalog() {
   [projects, templates] = await Promise.all([
-    fetch("/api/projects").then((response) => response.json()),
-    fetch("/api/templates").then((response) => response.json()),
+    checkedFetch("/api/projects").then((response) => response.json()),
+    checkedFetch("/api/templates").then((response) => response.json()),
   ]);
   renderCatalog();
 }
@@ -243,9 +279,8 @@ async function loadCatalog() {
 async function submitCatalogForm(event, endpoint) {
   event.preventDefault();
   const form = event.currentTarget;
-  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+  await checkedFetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
   const message = form.querySelector(".form-message");
-  if (!response.ok) return (message.textContent = (await response.json()).error);
   form.reset();
   form.hidden = true;
   message.textContent = "";
@@ -300,7 +335,7 @@ document.querySelector("#budget-settings").addEventListener("submit", async (eve
   event.preventDefault();
   const formData = new FormData(event.currentTarget);
   const body = Object.fromEntries([...formData].map(([key, value]) => [key, Number(value)]));
-  const response = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await checkedFetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const status = document.querySelector("#settings-status");
   if (!response.ok) status.textContent = (await response.json()).error;
   else {
@@ -319,8 +354,7 @@ form.addEventListener("submit", async (event) => {
   const error = document.querySelector("#form-error");
   error.textContent = "";
   const body = Object.fromEntries(new FormData(form));
-  const response = await fetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok) return (error.textContent = (await response.json()).error);
+  await checkedFetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   form.reset();
   dialog.close();
   await refresh();
@@ -349,6 +383,8 @@ function connectionStatus(connected) {
   const status = document.querySelector(".local-status");
   status.classList.toggle("disconnected", !connected);
   status.querySelector("small").textContent = connected ? "Connected" : "Reconnecting…";
+  document.querySelector("#connection-banner").hidden = connected;
+  document.querySelector("#new-task").disabled = !connected;
 }
 
 function showUpdate(registration) {
@@ -357,24 +393,32 @@ function showUpdate(registration) {
   toast.className = "update-toast";
   toast.innerHTML = '<span>Control Plane update ready</span><button class="primary" type="button">Reload</button>';
   toast.querySelector("button").addEventListener("click", () => {
-    registration.waiting.postMessage({ type: "skip-waiting" });
-    window.location.reload();
+    navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload(), { once: true });
+    registration.waiting?.postMessage({ type: "skip-waiting" });
   });
   document.body.append(toast);
 }
 
 if ("serviceWorker" in navigator) {
-  const registration = await navigator.serviceWorker.register("/sw.js");
-  showUpdate(registration);
-  registration.addEventListener("updatefound", () => registration.installing?.addEventListener("statechange", () => showUpdate(registration)));
+  void navigator.serviceWorker.register("/sw.js").then((registration) => {
+    showUpdate(registration);
+    registration.addEventListener("updatefound", () => registration.installing?.addEventListener("statechange", () => showUpdate(registration)));
+  }).catch(() => {});
 }
 
-await refresh();
-await loadSettings();
-await loadCatalog();
+connectionStatus(false);
 renderNotifications();
 const events = new EventSource("/api/events");
-events.onopen = () => connectionStatus(true);
+events.onopen = () => {
+  connectionStatus(true);
+  void Promise.all([loadSettings(), loadCatalog()]).catch(() => {});
+};
+events.addEventListener("snapshot", (event) => {
+  const snapshot = JSON.parse(event.data);
+  for (const run of snapshot) addNotification(notificationForTransition(currentRuns.find((item) => item.id === run.id), run));
+  snapshot.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  render(snapshot);
+});
 events.addEventListener("run", (event) => {
   const changed = JSON.parse(event.data);
   const previous = currentRuns.find((run) => run.id === changed.id);
@@ -386,5 +430,11 @@ events.addEventListener("run", (event) => {
 });
 events.onerror = () => {
   connectionStatus(false);
-  setTimeout(() => void refresh().catch(() => {}), 2000);
 };
+
+document.querySelector("#approvals-nav").addEventListener("click", () => {
+  document.querySelector("#state-filter").value = "approvals";
+  document.querySelector("#show-archived").checked = false;
+  render(currentRuns);
+  document.querySelector(".panel").scrollIntoView({ behavior: "smooth" });
+});

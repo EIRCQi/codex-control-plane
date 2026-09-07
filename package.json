@@ -49,17 +49,32 @@
     "icon": "build/icon.png",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "linux": {
       "category": "Development",
       "maintainer": "EIRCQi <64245730+EIRCQi@users.noreply.github.com>",
       "synopsis": "Local-first workflow control for Codex",
       "syncDesktopName": true,
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Codex-Control-Plane-${version}-win-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "Codex-Control-Plane-${version}-win-${arch}-portable.${ext}"
     }
   }
 }

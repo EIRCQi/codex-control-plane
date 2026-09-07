@@ -85,3 +85,13 @@ npm test
 - Cancellation first sends `SIGTERM`, then escalates to `SIGKILL` if the process does not exit.
 
 This is an early MVP. Run it only on repositories you trust and inspect the proposed plan before approving writes.
+
+## Reliability and recovery
+
+The Runner now saves JSON snapshots sequentially using temporary files and atomic replacement. Unreadable or malformed saved data stops startup with its original file preserved. A failed port bind never restores queued jobs. Use one Runner per data directory; a different port alone does not isolate the stored state.
+
+Task actions are serialized per repository. Retry and history deletion wait for the previous phase to stop; rejected write access requires fresh analysis and approval. Applying a diff checks its approval state, original branch, HEAD and clean index before applying, and repeated application is rejected. Old pending diffs without a saved baseline must be discarded and regenerated.
+
+SSE reconnects receive a current snapshot, and failed requests appear in an error banner. Service-worker registration failure does not block the console. Browser mode needs only Node and Git: `npm start` does not require downloading Electron. Desktop mode remains `npm install` followed by `npm run desktop`. Quit (or SIGINT/SIGTERM in browser mode) stops managed Codex processes, waits for their phase cleanup, and saves state. Native Electron behavior and signed installer distribution still require platform testing.
+
+Every push to main and pull request now runs dependency-free runtime checks on Linux, macOS and Windows. The POSIX HTTP/worktree integration test uses a simulated Codex executable and makes no model requests. Windows installer and portable EXE assets have distinct names.

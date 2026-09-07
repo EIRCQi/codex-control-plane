@@ -38,3 +38,10 @@ test("icon generator passes filesystem paths to sharp", async () => {
   assert.match(generator, /toFile\(output\)/);
   assert.doesNotMatch(generator, /path\.dirname\(output\.pathname\)/);
 });
+
+test("Windows installer and portable packages cannot overwrite one another", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const resolve = (target) => (pkg.build[target]?.artifactName || pkg.build.artifactName)
+    .replaceAll("${version}", pkg.version).replaceAll("${os}", "win").replaceAll("${arch}", "x64").replaceAll("${ext}", "exe");
+  assert.notEqual(resolve("nsis"), resolve("portable"));
+});

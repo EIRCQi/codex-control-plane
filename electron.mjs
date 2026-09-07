@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, nativeImage, shell, dialog } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopWindowOptions, trayMenu } from "./lib/desktop.mjs";
@@ -10,6 +10,8 @@ const hasLock = app.requestSingleInstanceLock();
 let window = null;
 let tray = null;
 let quitting = false;
+let shutdownRunner = null;
+let shutdownComplete = false;
 
 function showWindow() {
   if (!window) return;
@@ -25,14 +27,15 @@ function rebuildTrayMenu() {
     if (!item.id) return item;
     if (item.id === "toggle") return { ...item, click: () => window?.isVisible() ? window.hide() : showWindow() };
     if (item.id === "browser") return { ...item, click: () => void shell.openExternal(url) };
-    if (item.id === "quit") return { ...item, click: () => { quitting = true; app.quit(); } };
+    if (item.id === "quit") return { ...item, click: () => app.quit() };
     return item;
   })));
 }
 
 async function start() {
   process.env.CODEX_CONTROL_PLANE_DATA_DIR = path.join(app.getPath("userData"), "data");
-  const { serverReady } = await import("./server.mjs");
+  const { serverReady, shutdown } = await import("./server.mjs");
+  shutdownRunner = shutdown;
   await serverReady;
   const icon = nativeImage.createFromPath(iconPath);
   window = new BrowserWindow(desktopWindowOptions(icon));
@@ -64,10 +67,20 @@ if (!hasLock) {
   app.quit();
 } else {
   app.on("second-instance", showWindow);
-  app.on("before-quit", () => (quitting = true));
+  app.on("before-quit", (event) => {
+    if (shutdownComplete || !shutdownRunner) { quitting = true; return; }
+    event.preventDefault();
+    if (quitting) return;
+    quitting = true;
+    void shutdownRunner().catch(console.error).finally(() => {
+      shutdownComplete = true;
+      app.quit();
+    });
+  });
   app.on("activate", showWindow);
   app.whenReady().then(start).catch((error) => {
     console.error(error);
+    dialog.showErrorBox("Unable to start Control Plane", error.code === "EADDRINUSE" ? `Port ${Number(process.env.PORT || 4310)} is occupied. Quit the other Runner before starting the desktop app.` : error.message);
     app.quit();
   });
 }
