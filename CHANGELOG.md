@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-09-08
+
+- Added browser-local task drafts, template instruction previews, an explicit clear-draft action and mode selection that survives template changes and reconnects. Failed submissions retain inputs; duplicate submissions are blocked until the request finishes.
+- Split task details into Overview, Output, Events and Diff tabs with keyboard navigation. Added a persistent action footer, output/patch copying, colored diff lines and state-specific next-step guidance. Live updates preserve the current tab, scroll and supported control focus.
+- Added visible pending-action feedback, persistent error messages, success notifications and archive undo. Delayed HTTP replies no longer replace newer SSE state. Unsaved budget fields remain intact on reconnect.
+- Put the task queue first, added status shortcuts, quick filters, clear-filter and empty-state actions, and load-more history pagination in groups of 20.
+- Added narrow-window navigation, visible keyboard focus, keyboard-accessible notification entries, task/search shortcuts and reduced-motion styles. Updated the service-worker shell cache to include the new frontend modules.
+- Added five form-controller tests for preview parity, saved drafts, template/mode selection, failed/duplicate submissions and clearing accepted drafts. All 47 Node tests pass; frontend syntax and HTML structure checks pass. The form adapter does not validate browser layout or native focus behavior. Browser preview was blocked in the development environment, so real browser interaction and visual checks remain unverified.
+
+This source update adds no dependencies or data migration and does not publish native installers. Restart the runner and reload the interface after pulling it.
+
 ## 0.2.1 — 2026-09-07
 
 - Fixed change collection to compare the final worktree against the task's original commit. Staged edits, agent commits, new files, removals, renames and binary changes are included in the approval patch. Explicit patch prefixes and disabled text conversion keep patches applicable with custom Git diff settings.

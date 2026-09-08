@@ -12,10 +12,11 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#runs-panel">Skip to tasks</a>
     <aside>
       <div class="brand"><span class="brand-mark">C</span><span>Control Plane</span></div>
-      <nav>
-        <button class="nav active" data-target="top">⌁ <span>Mission Control</span></button>
+      <nav aria-label="Main navigation">
+        <button class="nav active" data-target="runs-panel">⌁ <span>Mission Control</span></button>
         <button class="nav" data-target="catalog-panel">◇ <span>Projects & templates</span></button>
         <button class="nav" id="approvals-nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
         <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
@@ -25,12 +26,15 @@
       <div class="local-status"><i></i><div><strong>Local runner</strong><small>Connected</small></div></div>
     </aside>
     <main>
+      <nav class="mobile-nav" aria-label="Section navigation">
+        <button class="nav active" data-target="runs-panel">Tasks</button><button class="nav" data-filter-nav="approvals">Approvals</button><button class="nav" data-target="catalog-panel">Projects</button><button class="nav" data-target="usage-panel">Usage</button><button class="nav" data-target="environment-panel">Environment</button><button class="nav" data-target="budget-settings">Settings</button>
+      </nav>
       <header>
         <div><p class="eyebrow">LOCAL WORKSPACE <span id="app-version"></span></p><h1>Mission Control</h1></div>
         <div class="header-actions">
           <button class="secondary install-app" id="install-app" type="button" hidden>Install app</button>
           <button class="notification-button" id="notification-button" type="button" aria-label="Open notifications" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
-          <button class="primary" id="new-task">＋ New task</button>
+          <button class="primary" id="new-task" title="New task (N)">＋ New task</button>
           <div class="notification-popover" id="notification-popover" hidden>
             <div class="notification-head"><div><p class="eyebrow">ACTIVITY</p><h3>Notifications</h3></div><button class="text-button" id="mark-notifications-read" type="button">Mark all read</button></div>
             <div id="notification-list" class="notification-list"><p class="notification-empty">No notifications yet.</p></div>
@@ -44,38 +48,29 @@
         </div>
       </header>
       <p id="connection-banner" class="connection-banner" role="status">Connecting to local Runner… If it is stopped, run npm start and leave it running.</p>
-      <p id="operation-error" class="operation-error" role="alert" hidden></p>
+      <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="Dismiss error">×</button></div>
       <section class="metrics">
-        <article><span>Active runs</span><strong id="active-runs">0</strong><small>Right now</small></article>
-        <article><span>Needs approval</span><strong id="needs-approval">0</strong><small>Write access blocked</small></article>
-        <article><span>Completed</span><strong id="completed-runs">0</strong><small>This workspace</small></article>
+        <button class="metric-action" data-filter-nav="active"><span>Active runs</span><strong id="active-runs">0</strong><small>View running tasks →</small></button>
+        <button class="metric-action" data-filter-nav="approvals"><span>Needs approval</span><strong id="needs-approval">0</strong><small>Review pending actions →</small></button>
+        <button class="metric-action" data-filter-nav="completed"><span>Completed</span><strong id="completed-runs">0</strong><small>View completed tasks →</small></button>
         <article><span>Security mode</span><strong class="safe">Safe</strong><small>Approval required</small></article>
       </section>
-      <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
-        <div class="panel-title"><div><p class="eyebrow">GET READY</p><h2 id="environment-title">Environment</h2></div><button class="secondary" id="refresh-environment" type="button">Check again</button></div>
-        <div class="environment-overview"><strong class="environment-summary" id="environment-summary">Waiting for local runner</strong><small id="environment-meta"></small></div>
-        <div class="environment-checks" id="environment-checks"></div>
-        <details class="runtime-options"><summary>Configure executable paths</summary>
-          <p>Leave paths empty for automatic detection. Finish or cancel pending tasks before changing paths. On Windows, select native .exe files.</p>
-          <form id="runtime-settings">
-            <label>Git executable<input name="gitPath" spellcheck="false" placeholder="Automatic detection" /><small id="gitPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_GIT_BIN. Restart the runner after changing that environment variable.</small></label>
-            <label>Codex executable<input name="codexPath" spellcheck="false" placeholder="Automatic detection" /><small id="codexPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_CODEX_BIN. Restart the runner after changing that environment variable.</small></label>
-            <button class="primary">Save &amp; check</button>
-          </form>
-        </details>
-        <p id="environment-status" class="environment-status" role="status" aria-live="polite"></p>
-      </section>
-      <section class="panel">
+      <section class="panel" id="runs-panel" tabindex="-1">
         <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
-        <div class="run-filters">
-          <input id="run-search" type="search" placeholder="Search tasks or repositories…" />
-          <select id="state-filter"><option value="">All states</option><option value="active">Active</option><option value="approvals">All approvals</option><option value="awaiting_approval">Write approval</option><option value="awaiting_merge">Review changes</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
-          <select id="project-filter"><option value="">All projects</option></select>
-          <label class="archive-toggle"><input id="show-archived" type="checkbox" /> Show archived</label>
-          <span id="filter-count"></span>
+        <div class="quick-filters" role="group" aria-label="Quick task filters">
+          <button type="button" class="filter-chip" data-quick-filter="" aria-pressed="true">All states</button><button type="button" class="filter-chip" data-quick-filter="active" aria-pressed="false">Running</button><button type="button" class="filter-chip" data-quick-filter="approvals" aria-pressed="false">Needs approval</button><button type="button" class="filter-chip" data-quick-filter="failed" aria-pressed="false">Failed</button>
+          <button type="button" class="text-button" id="clear-filters" hidden>Clear filters</button>
         </div>
-        <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p></div>
+        <div class="run-filters">
+          <input id="run-search" type="search" aria-label="Search tasks" aria-keyshortcuts="/" placeholder="Search tasks or repositories…" />
+          <select id="state-filter" aria-label="Task status"><option value="">All states</option><option value="active">Active</option><option value="approvals">All approvals</option><option value="awaiting_approval">Write approval</option><option value="awaiting_merge">Review changes</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="discarded">Discarded</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
+          <select id="project-filter" aria-label="Filter by project"><option value="">All projects</option></select>
+          <label class="archive-toggle"><input id="show-archived" type="checkbox" /> Show archived</label>
+          <span id="filter-count" role="status"></span>
+        </div>
+        <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p><button class="secondary" id="empty-action" type="button">Create a task</button></div>
         <div id="runs" class="runs"></div>
+        <div class="run-pagination"><button class="secondary" id="load-more" hidden>Show 20 more</button></div>
       </section>
       <section class="catalog-panel" id="catalog-panel">
         <div class="panel-title"><div><p class="eyebrow">WORKSPACE CATALOG</p><h2>Projects & templates</h2></div><span class="usage-note">Stored locally</span></div>
@@ -83,21 +78,21 @@
           <div class="catalog-column">
             <div class="catalog-head"><div><h3>Registered projects</h3><p>Select a project instead of entering its path for every run.</p></div><button class="secondary" id="show-project-form">＋ Add project</button></div>
             <form class="inline-form" id="project-form" hidden>
-              <input name="name" required placeholder="Project name" />
-              <input name="repository" required placeholder="/absolute/path/to/repository" />
+              <input name="name" required aria-label="Project name" placeholder="Project name" />
+              <input name="repository" required aria-label="Repository path" placeholder="/absolute/path/to/repository" />
               <button class="primary">Register</button><button type="button" class="secondary form-cancel">Cancel</button>
-              <p class="form-message"></p>
+              <p class="form-message" role="status"></p>
             </form>
             <div class="catalog-list" id="project-list"></div>
           </div>
           <div class="catalog-column">
             <div class="catalog-head"><div><h3>Task templates</h3><p>Turn repeatable instructions into one-click starting points.</p></div><button class="secondary" id="show-template-form">＋ New template</button></div>
             <form class="inline-form template-form" id="template-form" hidden>
-              <input name="name" required placeholder="Template name" />
-              <input name="description" placeholder="Short description" />
-              <textarea name="prompt" required rows="4" placeholder="Instructions containing {{task}}"></textarea>
+              <input name="name" required aria-label="Template name" placeholder="Template name" />
+              <input name="description" aria-label="Template description" placeholder="Short description" />
+              <textarea name="prompt" required aria-label="Template instructions" rows="4" placeholder="Instructions containing {{task}}"></textarea>
               <button class="primary">Save</button><button type="button" class="secondary form-cancel">Cancel</button>
-              <p class="form-message"></p>
+              <p class="form-message" role="status"></p>
             </form>
             <div class="catalog-list" id="template-list"></div>
           </div>
@@ -126,25 +121,53 @@
           <span id="settings-status"></span>
         </form>
       </section>
+      <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
+        <div class="panel-title"><div><p class="eyebrow">GET READY</p><h2 id="environment-title">Environment</h2></div><button class="secondary" id="refresh-environment" type="button">Check again</button></div>
+        <div class="environment-overview"><strong class="environment-summary" id="environment-summary">Waiting for local runner</strong><small id="environment-meta"></small></div>
+        <div class="environment-checks" id="environment-checks"></div>
+        <details class="runtime-options"><summary>Configure executable paths</summary>
+          <p>Leave paths empty for automatic detection. Finish or cancel pending tasks before changing paths. On Windows, select native .exe files.</p>
+          <form id="runtime-settings">
+            <label>Git executable<input name="gitPath" spellcheck="false" placeholder="Automatic detection" /><small id="gitPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_GIT_BIN. Restart the runner after changing that environment variable.</small></label>
+            <label>Codex executable<input name="codexPath" spellcheck="false" placeholder="Automatic detection" /><small id="codexPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_CODEX_BIN. Restart the runner after changing that environment variable.</small></label>
+            <button class="primary">Save &amp; check</button>
+          </form>
+        </details>
+        <p id="environment-status" class="environment-status" role="status" aria-live="polite"></p>
+      </section>
     </main>
-    <dialog id="task-dialog">
+    <dialog id="task-dialog" aria-labelledby="task-title">
       <form id="task-form">
-        <div class="dialog-head"><div><p class="eyebrow">NEW RUN</p><h2>Give Codex a task</h2></div><button type="button" class="icon" id="close-dialog">×</button></div>
+        <div class="dialog-head"><div><p class="eyebrow">NEW RUN</p><h2 id="task-title">Give Codex a task</h2></div><button type="button" class="icon" id="close-dialog" aria-label="Close task form">×</button></div>
+        <div class="modal-feedback" aria-label="Task feedback"></div>
+        <fieldset>
         <label>Project<select name="projectId" required id="task-project"><option value="">Register a project first</option></select></label>
-        <label>Template<select name="templateId" id="task-template"><option value="">No template</option></select></label>
+        <label>Template<select name="templateId" id="task-template"><option value="">No template</option></select><small id="task-template-note"></small></label>
         <label>Task mode<select name="mode" id="task-mode"><option value="implement">Analyze, then implement with approval</option><option value="review">Read-only review</option></select></label>
         <label>Task details<textarea name="prompt" required rows="5" placeholder="Describe the change and expected outcome…"></textarea></label>
+        <details class="task-preview"><summary>Preview task instructions</summary><pre id="task-preview"></pre></details>
         <div class="policy"><span>◉</span><div><strong id="task-policy-title">Protected execution</strong><p id="task-policy-text">Analysis runs read-only. You must approve before Codex can modify files.</p></div></div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="cancel-dialog">Cancel</button><button class="primary" id="start-task">Start analysis</button></div>
-        <p id="form-error" class="error"></p>
+        <div class="draft-row"><span id="draft-status" role="status"></span><button type="button" class="text-button" id="reset-task">Clear draft</button></div>
+        <div class="dialog-actions"><small class="shortcut-hint">⌘ / Ctrl + Enter to start</small><button type="button" class="secondary" id="cancel-dialog">Close</button><button class="primary" id="start-task">Start analysis</button></div>
+        </fieldset>
+        <p id="form-error" class="error" role="alert"></p>
       </form>
     </dialog>
-    <dialog id="run-dialog" class="run-dialog">
+    <dialog id="run-dialog" class="run-dialog" aria-labelledby="detail-title">
       <div class="detail-shell">
-        <div class="dialog-head"><div><p class="eyebrow">RUN DETAILS</p><h2 id="detail-title">Task</h2></div><button type="button" class="icon" id="close-run-dialog">×</button></div>
+        <div class="dialog-head"><div><p class="eyebrow">RUN DETAILS</p><h2 id="detail-title">Task</h2></div><button type="button" class="icon" id="close-run-dialog" aria-label="Close task details">×</button></div>
+        <div class="modal-feedback" aria-label="Task feedback"></div>
+        <div class="detail-tabs" role="tablist" aria-label="Task details sections">
+          <button type="button" id="tab-overview" role="tab" data-detail-tab="overview" aria-controls="detail-overview" aria-selected="true">Overview</button>
+          <button type="button" id="tab-output" role="tab" data-detail-tab="output" aria-controls="detail-output" aria-selected="false" tabindex="-1">Output</button>
+          <button type="button" id="tab-events" role="tab" data-detail-tab="events" aria-controls="detail-events" aria-selected="false" tabindex="-1">Events</button>
+          <button type="button" id="tab-diff" role="tab" data-detail-tab="diff" aria-controls="detail-diff" aria-selected="false" tabindex="-1">Diff</button>
+        </div>
         <div id="run-detail"></div>
+        <div class="detail-footer"><p id="detail-error" class="error" role="alert"></p><div id="detail-actions" class="detail-actions"></div></div>
       </div>
     </dialog>
+    <div id="toast-region" class="toast-region" aria-label="Operation feedback"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

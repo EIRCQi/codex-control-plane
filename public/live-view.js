@@ -1,8 +1,13 @@
+const focusSelector = 'button[data-id],button[data-copy],[data-tab-panel]';
+
 export function captureView(root) {
   const active = root.ownerDocument.activeElement;
   return {
     top: root.scrollTop, left: root.scrollLeft,
-    focus: root.contains(active) && active.matches('button[data-id]') ? { id: active.dataset.id, action: active.dataset.action, className: active.className } : null,
+    focus: root.contains(active) && active.matches(focusSelector) ? {
+      id: active.dataset.id, action: active.dataset.action, runAction: active.dataset.runAction,
+      copy: active.dataset.copy, panel: active.dataset.tabPanel, className: active.className,
+    } : null,
     sections: new Map([...root.querySelectorAll('[data-view]')].map((node) => [node.dataset.view, {
       open: node.tagName === 'DETAILS' ? node.open : undefined,
       top: node.scrollTop, left: node.scrollLeft,
@@ -21,8 +26,8 @@ export function restoreView(root, state) {
     node.scrollLeft = previous.left;
   }
   if (state.focus) {
-    const {id, action, className} = state.focus;
-    [...root.querySelectorAll('button[data-id]')].find((button) => button.dataset.id === id && button.dataset.action === action && button.className === className)?.focus({preventScroll:true});
+    const {id, action, runAction, copy, panel, className} = state.focus;
+    [...root.querySelectorAll(focusSelector)].find((node) => node.dataset.id === id && node.dataset.action === action && node.dataset.runAction === runAction && node.dataset.copy === copy && node.dataset.tabPanel === panel && node.className === className)?.focus({preventScroll:true});
   }
 }
 

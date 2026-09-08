@@ -21,3 +21,6 @@ jobs:
       - run: node --check server.mjs
       - run: node --check electron.mjs
       - run: node --check public/app.js
+      - run: node --check public/task-composer.js
+      - run: node --check public/feedback.js
+      - run: node --check public/live-view.js

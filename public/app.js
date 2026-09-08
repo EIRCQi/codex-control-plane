@@ -1,3 +1,5 @@
+import { setupTaskComposer } from "./task-composer.js";
+import { notify } from "./feedback.js";
 import { captureView, restoreView, createRunList } from "./live-view.js";
 import { setupEnvironment } from "./environment.js";
 import { agentOutput } from "./run-output.js";
@@ -6,9 +8,12 @@ import { notificationForTransition } from "./notifications.js";
 const runsEl = document.querySelector("#runs");
 const emptyEl = document.querySelector("#empty");
 const dialog = document.querySelector("#task-dialog");
-const form = document.querySelector("#task-form");
 const runDialog = document.querySelector("#run-dialog");
 let currentRuns = [];
+let runnerConnected = false;
+let visibleLimit = 20;
+let detailTab = "overview";
+let settingsDirty = false;
 let detailRunId = null;
 let renderedDetailRun = null;
 let projects = [];
@@ -51,15 +56,15 @@ function renderNotifications() {
   badge.hidden = unread === 0;
   badge.textContent = unread > 99 ? "99+" : unread;
   document.querySelector("#notification-list").innerHTML = notifications.length ? notifications.map((item) => `
-    <article class="${item.read ? "" : "unread"}" data-notification-id="${escapeHtml(item.id)}" data-run-id="${escapeHtml(item.runId)}">
+    <button type="button" class="notification-entry ${item.read ? "" : "unread"}" data-notification-id="${escapeHtml(item.id)}" data-run-id="${escapeHtml(item.runId)}">
       <i></i><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.task)}</p><time>${new Date(item.at).toLocaleString()}</time></div>
-    </article>`).join("") : '<p class="notification-empty">No notifications yet.</p>';
+    </button>`).join("") : '<p class="notification-empty">No notifications yet.</p>';
   document.querySelectorAll("[data-notification-id]").forEach((item) => item.addEventListener("click", () => {
     const notification = notifications.find((entry) => entry.id === item.dataset.notificationId);
     if (notification) notification.read = true;
     writeLocal(notificationStorageKey, notifications);
     renderNotifications();
-    document.querySelector("#notification-popover").hidden = true;
+    closeNotifications();
     const run = currentRuns.find((entry) => entry.id === item.dataset.runId);
     if (run) openRunDetail(run);
   }));
@@ -129,9 +134,10 @@ function renderUsage(runs) {
 
 function showError(message) {
   const banner = document.querySelector("#operation-error");
-  banner.textContent = message;
+  document.querySelector("#operation-error-message").textContent = message;
   banner.hidden = false;
   if (dialog.open) document.querySelector("#form-error").textContent = message;
+  if (runDialog.open) document.querySelector("#detail-error").textContent = message;
 }
 
 async function checkedFetch(url, options) {
@@ -140,6 +146,10 @@ async function checkedFetch(url, options) {
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || `Request failed (${response.status})`);
+    }
+    if (options?.method && !['GET','HEAD'].includes(options.method.toUpperCase())) {
+      document.querySelector('#operation-error').hidden = true;
+      if (runDialog.open) document.querySelector('#detail-error').textContent = '';
     }
     return response;
   } catch (error) {
@@ -152,56 +162,135 @@ window.addEventListener("unhandledrejection", (event) => {
   event.preventDefault();
 });
 const environment = setupEnvironment({ request: checkedFetch, escapeHtml });
-const pendingActions = new Set();
+document.querySelector("#dismiss-error").addEventListener("click", () => { document.querySelector("#operation-error").hidden = true; });
+const composer = setupTaskComposer({
+  request: checkedFetch, escapeHtml, notify,
+  onNeedProject: () => {
+    const projectForm = document.querySelector("#project-form");
+    projectForm.hidden = false; navigate("catalog-panel"); projectForm.elements.name.focus();
+    notify("Register a local repository to create your first task");
+  },
+  onCreated: async (created) => {
+    clearFilters();
+    openRunDetail(acceptRun(created));
+  },
+});
+const pendingActions = new Map();
+function acceptRun(incoming) {
+  const current = currentRuns.find((run) => run.id === incoming.id);
+  // The SSE stream may already have delivered a later state than the HTTP reply.
+  const latest = current?.updatedAt > incoming.updatedAt ? current : incoming;
+  render([latest, ...currentRuns.filter((run) => run.id !== latest.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  return latest;
+}
 async function action(id, type) {
   if (pendingActions.has(id)) return false;
-  pendingActions.add(id);
+  pendingActions.set(id, type);
   updatePendingButtons();
   try {
-    await checkedFetch(`/api/runs/${id}/${type}`, { method: "POST" });
+    const updated = await checkedFetch(`/api/runs/${id}/${type}`, { method: "POST" }).then((response) => response.json());
     document.querySelector("#operation-error").hidden = true;
-    await refresh();
+    document.querySelector("#detail-error").textContent = "";
+    acceptRun(updated);
+    const messages = {approve:"Implementation approved", reject:"Write request rejected", apply:"Changes applied to the repository", discard:"Changes discarded", cancel:"Cancellation requested", retry:"Retry queued", archive:"Task archived", unarchive:"Task restored"};
+    notify(messages[type] || "Task updated", type === "archive" ? {action:{label:"Undo",run:()=>action(id,"unarchive")}} : {});
     return true;
   } finally { pendingActions.delete(id); updatePendingButtons(); }
 }
 
+function getRunAction(button) {
+  if (button.dataset.runAction) return button.dataset.runAction;
+  const operations = { approve: "approve", reject: "reject", apply: "apply", discard: "discard", "cancel-run": "cancel", "retry-run": "retry", "archive-run": button.dataset.action };
+  return operations[Object.keys(operations).find((name) => button.classList.contains(name))];
+}
+
 function updatePendingButtons() {
-  document.querySelectorAll('button[data-id]').forEach((button) => {
-    if (!button.classList.contains('detail-run')) button.disabled = pendingActions.has(button.dataset.id);
+  for (const root of [runsEl, runDialog]) root.querySelectorAll('button[data-id]').forEach((button) => {
+    const operation = getRunAction(button);
+    if (!operation) return;
+    const run = currentRuns.find((item) => item.id === button.dataset.id);
+    button.disabled = !runnerConnected || pendingActions.has(button.dataset.id) || Boolean(run?.starting && operation !== "cancel");
+    const busy = pendingActions.get(button.dataset.id) === operation;
+    button.dataset.label ||= button.textContent;
+    button.textContent = busy ? "Working…" : button.dataset.label;
+    button.setAttribute("aria-busy", String(busy));
   });
 }
+
+function setDetailTab(name, focus = false) {
+  detailTab = name;
+  runDialog.querySelectorAll('[data-detail-tab]').forEach((button) => {
+    const selected = button.dataset.detailTab === name;
+    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+    if (focus && selected) button.focus();
+  });
+  runDialog.querySelectorAll('[data-tab-panel]').forEach((panel) => { panel.hidden = panel.dataset.tabPanel !== name; });
+}
+runDialog.querySelector('[role="tablist"]').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-detail-tab]');
+  if (button) setDetailTab(button.dataset.detailTab);
+});
+runDialog.querySelector('[role="tablist"]').addEventListener('keydown', (event) => {
+  const names = ['overview','output','events','diff'];
+  let index = names.indexOf(detailTab);
+  if (event.key === 'ArrowRight') index = (index + 1) % names.length;
+  else if (event.key === 'ArrowLeft') index = (index + names.length - 1) % names.length;
+  else if (event.key === 'Home') index = 0;
+  else if (event.key === 'End') index = names.length - 1;
+  else return;
+  event.preventDefault(); setDetailTab(names[index], true);
+});
 
 function openRunDetail(run) {
   if (!run) return;
   const preserve = runDialog.open && detailRunId === run.id;
+  if (!preserve) { detailTab = run.state === 'awaiting_merge' ? 'diff' : run.state === 'awaiting_approval' ? 'output' : 'overview'; document.querySelector('#detail-error').textContent = ''; }
   detailRunId = run.id;
   renderRunDetail(run, preserve);
   if (!runDialog.open) runDialog.showModal();
+}
+
+function detailActions(run) {
+  const button = (op,label,primary=false) => `<button type="button" class="${primary ? 'primary' : 'secondary'}" data-id="${escapeHtml(run.id)}" data-run-action="${op}">${label}</button>`;
+  if (run.state === 'awaiting_approval') return button('reject','Reject') + button('approve','Approve & run',true);
+  if (run.state === 'awaiting_merge') return button('discard','Discard changes') + button('apply','Apply to repository',true);
+  if (['running','queued','approved'].includes(run.state)) return button('cancel','Cancel run');
+  let actions = ['failed','cancelled','budget_exceeded'].includes(run.state) ? button('retry','Retry task',true) : '';
+  if (terminalStates.has(run.state)) actions += button(run.archived?'unarchive':'archive',run.archived?'Restore task':'Archive task') + button('delete','Delete history');
+  return actions;
 }
 
 function renderRunDetail(run, preserve = true) {
   const previous = preserve ? captureView(runDialog) : null;
   renderedDetailRun = run;
   const usage = run.usage || {};
+  const nextSteps = {queued:'Waiting for an available execution slot.',running:'Codex is working. Follow its progress in Events.',approved:'Implementation is approved and waiting to start.',awaiting_approval:'Read the analysis in Output, then approve implementation when you are ready.',awaiting_merge:'Review the Diff tab before applying these changes to your repository.',completed:'The task is complete. Read the result in Output.',failed:'Review the error and events, then retry when the issue is resolved.',cancelled:'This task was cancelled. You can retry or archive it.',budget_exceeded:'Update your budget in Settings before retrying this task.',discarded:'The isolated changes have been discarded.'};
   document.querySelector("#detail-title").textContent = run.prompt;
   document.querySelector("#run-detail").innerHTML = `
-    <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong>${escapeHtml(run.repository)}</strong></div><div><span>Created</span><strong>${new Date(run.createdAt).toLocaleString()}</strong></div></div>
-    <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
-    ${run.output ? `<section class="detail-section"><h3>${run.mode === "review" ? "Review report" : "Agent output"}</h3><pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre></section>` : ""}
-    <section class="detail-section"><h3>Event timeline</h3><div class="timeline">${run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join("")}</div></section>
-    ${run.logs?.length ? `<section class="detail-section"><h3>Codex events</h3><div class="log-lines detail-logs" data-view="detail-logs" data-follow="true">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div></section>` : ""}
-    ${run.diff ? `<section class="detail-section"><h3>Generated diff</h3><pre class="diff" data-view="detail-diff">${escapeHtml(run.diff)}</pre></section>` : ""}
-    <div class="detail-actions">${terminalStates.has(run.state) ? `<button class="secondary detail-archive" data-id="${run.id}" data-action="${run.archived ? "unarchive" : "archive"}">${run.archived ? "Restore run" : "Archive run"}</button><button class="secondary danger delete-run" data-id="${run.id}">Delete history record</button>` : ""}</div>`;
-  document.querySelector(".detail-archive")?.addEventListener("click", async (event) => {
-    await action(event.currentTarget.dataset.id, event.currentTarget.dataset.action);
-    runDialog.close();
-  });
-  document.querySelector(".delete-run")?.addEventListener("click", async (event) => {
-    if (!window.confirm("Delete this control-plane history record? Repository files will not be touched.")) return;
-    await checkedFetch(`/api/runs/${event.currentTarget.dataset.id}`, { method: "DELETE" });
-    runDialog.close();
-    await refresh();
-  });
+    <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+      <p class="next-step">${escapeHtml(nextSteps[run.state] || '')}</p>
+      <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</strong></div><div><span>Task mode</span><strong>${run.mode === 'review' ? 'Read-only review' : 'Implementation'}</strong></div></div>
+      <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
+      ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ''}
+      <p class="detail-created">Created ${new Date(run.createdAt).toLocaleString()}</p>
+    </section>
+    <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0">
+      <div class="content-toolbar"><h3>${run.mode === 'review' ? 'Review report' : 'Agent output'}</h3><button type="button" class="secondary" data-copy="output" ${run.output?'':'disabled'}>Copy output</button></div>
+      ${run.output ? `<pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre>` : '<p class="tab-empty">The report will appear when this phase completes. Follow live progress in Events.</p>'}
+    </section>
+    <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0">
+      <h3>Workflow timeline</h3><div class="timeline">${run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join("")}</div>
+      <div class="content-toolbar"><h3>Codex events · ${run.logs?.length || 0}</h3></div>
+      ${run.logs?.length ? `<div class="log-lines detail-logs" data-view="detail-logs" data-follow="true">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div>` : '<p class="tab-empty">No Codex events yet.</p>'}
+    </section>
+    <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0">
+      <div class="content-toolbar"><h3>Proposed changes</h3><button type="button" class="secondary" data-copy="diff" ${run.diff?'':'disabled'}>Copy patch</button></div>
+      ${run.diff ? `<p class="diff-summary">${escapeHtml(run.diffStat || '')}</p><pre class="diff" data-view="detail-diff">${run.diff.split('\n').map((line) => `<span class="${line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':line.startsWith('@@')?'diff-hunk':''}">${escapeHtml(line)}</span>`).join('\n')}</pre>` : `<p class="tab-empty">${run.mode === 'review' ? 'Read-only reviews do not produce a patch.' : 'A diff appears here after approved implementation produces changes.'}</p>`}
+    </section>`;
+  const footer = document.querySelector('#detail-actions');
+  const markup = detailActions(run);
+  if (footer.dataset.markup !== markup) { footer.innerHTML = markup; footer.dataset.markup = markup; }
+  setDetailTab(detailTab);
   if (previous) restoreView(runDialog, previous);
   else runDialog.scrollTop = 0;
   updatePendingButtons();
@@ -242,17 +331,29 @@ function runCard(run) {
 }
 
 const updateRunList = createRunList(runsEl, runCard);
-runsEl.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-id]");
-  if (!button || !runsEl.contains(button) || button.disabled) return;
-  if (button.classList.contains("detail-run")) {
-    openRunDetail(currentRuns.find((run) => run.id === button.dataset.id));
+async function handleRunClick(event) {
+  const copy = event.target.closest('button[data-copy]');
+  if (copy && runDialog.contains(copy)) {
+    const text = copy.dataset.copy === 'diff' ? renderedDetailRun?.diff : agentOutput(renderedDetailRun?.output || '');
+    try { await navigator.clipboard.writeText(text || ''); notify(copy.dataset.copy === 'diff' ? 'Patch copied' : 'Output copied'); }
+    catch { notify('Clipboard is unavailable. Select the text and copy it manually.',{kind:'error'}); }
     return;
   }
-  const operations = { approve: "approve", reject: "reject", apply: "apply", discard: "discard", "cancel-run": "cancel", "retry-run": "retry", "archive-run": button.dataset.action };
-  const key = Object.keys(operations).find((name) => button.classList.contains(name));
-  if (key) void action(button.dataset.id, operations[key]);
-});
+  const button = event.target.closest("button[data-id]");
+  if (!button || button.disabled) return;
+  if (button.classList.contains("detail-run")) { openRunDetail(currentRuns.find((run) => run.id === button.dataset.id)); return; }
+  const operation = getRunAction(button);
+  if (!operation) return;
+  if (operation === 'delete') {
+    if (pendingActions.has(button.dataset.id) || !window.confirm('Delete this task history record? Its repository files will be kept.')) return;
+    const id = button.dataset.id;
+    pendingActions.set(id,'delete'); updatePendingButtons();
+    try { await checkedFetch(`/api/runs/${id}`,{method:'DELETE'}); render(currentRuns.filter((run) => run.id !== id)); notify('History record deleted'); }
+    finally { pendingActions.delete(id); updatePendingButtons(); }
+  } else await action(button.dataset.id,operation);
+}
+runsEl.addEventListener('click', handleRunClick);
+runDialog.addEventListener('click', handleRunClick);
 
 function render(runs) {
   currentRuns = runs;
@@ -260,14 +361,25 @@ function render(runs) {
   emptyEl.hidden = visibleRuns.length > 0;
   emptyEl.querySelector("h3").textContent = runs.length ? "No matching runs" : "No runs yet";
   emptyEl.querySelector("p").textContent = runs.length ? "Adjust the search or filters to see more history." : "Create a task to begin with read-only analysis.";
-  updateRunList(visibleRuns);
-  document.querySelector("#filter-count").textContent = `${visibleRuns.length} shown`;
-  const active = runs.filter((run) => ["queued", "running", "approved"].includes(run.state)).length;
-  const approval = runs.filter((run) => ["awaiting_approval", "awaiting_merge"].includes(run.state)).length;
+  updateRunList(visibleRuns.slice(0, visibleLimit));
+  const countLabel = `${Math.min(visibleLimit, visibleRuns.length)} of ${visibleRuns.length} tasks`;
+  if (document.querySelector("#filter-count").textContent !== countLabel) document.querySelector("#filter-count").textContent = countLabel;
+  document.querySelector("#load-more").hidden = visibleLimit >= visibleRuns.length;
+  document.querySelector("#empty-action").textContent = runs.length ? "Clear filters" : projects.length ? "Create a task" : "Register a project";
+  const filtered = document.querySelector("#run-search").value || document.querySelector("#state-filter").value || document.querySelector("#project-filter").value || document.querySelector("#show-archived").checked;
+  document.querySelector("#clear-filters").hidden = !filtered;
+  if (runs.length && !runs.some((run) => !run.archived) && !filtered) {
+    emptyEl.querySelector('h3').textContent = 'All tasks are archived';
+    emptyEl.querySelector('p').textContent = 'Open archived history to review previous work.';
+    document.querySelector('#empty-action').textContent = 'Show archived tasks';
+  }
+  document.querySelectorAll('[data-quick-filter]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.quickFilter === document.querySelector('#state-filter').value && !document.querySelector('#show-archived').checked)));
+  const active = runs.filter((run) => !run.archived && ["queued", "running", "approved"].includes(run.state)).length;
+  const approval = runs.filter((run) => !run.archived && ["awaiting_approval", "awaiting_merge"].includes(run.state)).length;
   document.querySelector("#active-runs").textContent = active;
   document.querySelector("#needs-approval").textContent = approval;
   document.querySelector("#approval-count").textContent = approval;
-  document.querySelector("#completed-runs").textContent = runs.filter((run) => run.state === "completed").length;
+  document.querySelector("#completed-runs").textContent = runs.filter((run) => !run.archived && run.state === "completed").length;
   renderUsage(runs);
   if (runDialog.open && detailRunId) {
     const selected = runs.find((run) => run.id === detailRunId);
@@ -284,6 +396,7 @@ async function refresh() {
 async function loadSettings() {
   const settings = await checkedFetch("/api/settings").then((response) => response.json());
   const settingsForm = document.querySelector("#budget-settings");
+  if (settingsDirty || settingsForm.dataset.busy) return;
   for (const [key, value] of Object.entries(settings)) {
     if (settingsForm.elements[key]) settingsForm.elements[key].value = value;
   }
@@ -293,13 +406,13 @@ function renderCatalog() {
   const selectedProjectFilter = document.querySelector("#project-filter").value;
   document.querySelector("#project-list").innerHTML = projects.length ? projects.map((project) => `<article><div><strong>${escapeHtml(project.name)}</strong><p>${escapeHtml(project.repository)}</p><small>${escapeHtml(project.branch)}${project.remote ? ` · ${escapeHtml(project.remote)}` : ""}</small></div><button class="icon delete-project" data-id="${project.id}" title="Remove registration">×</button></article>`).join("") : '<p class="catalog-empty">No projects registered yet.</p>';
   document.querySelector("#template-list").innerHTML = templates.map((template) => `<article><div><strong>${escapeHtml(template.name)}</strong>${template.builtIn ? '<span class="builtin">Built in</span>' : ""}<p>${escapeHtml(template.description || "Custom workflow template")}</p></div>${template.builtIn ? "" : `<button class="icon delete-template" data-id="${template.id}" title="Delete template">×</button>`}</article>`).join("");
-  document.querySelector("#task-project").innerHTML = projects.length ? `<option value="">Choose project…</option>${projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)} · ${escapeHtml(project.branch)}</option>`).join("")}` : '<option value="">Register a project first</option>';
-  document.querySelector("#task-template").innerHTML = '<option value="">No template</option>' + templates.map((template) => `<option value="${template.id}">${escapeHtml(template.name)}</option>`).join("");
   document.querySelector("#project-filter").innerHTML = '<option value="">All projects</option>' + projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("");
-  document.querySelector("#project-filter").value = selectedProjectFilter;
+  document.querySelector("#project-filter").value = projects.some((project) => project.id === selectedProjectFilter) ? selectedProjectFilter : '';
+  composer.catalogChanged(projects, templates);
   document.querySelectorAll(".delete-project").forEach((button) => button.addEventListener("click", async () => {
     await checkedFetch(`/api/projects/${button.dataset.id}`, { method: "DELETE" });
     await loadCatalog();
+    notify("Registration removed");
   }));
   document.querySelectorAll(".delete-template").forEach((button) => button.addEventListener("click", async () => {
     await checkedFetch(`/api/templates/${button.dataset.id}`, { method: "DELETE" });
@@ -313,40 +426,36 @@ async function loadCatalog() {
     checkedFetch("/api/templates").then((response) => response.json()),
   ]);
   renderCatalog();
-  syncTaskMode();
+  render(currentRuns);
+}
+
+async function withBusyForm(target, work) {
+  if (target.dataset.busy) return;
+  target.dataset.busy = 'true'; target.setAttribute('aria-busy','true');
+  const controls = [...target.querySelectorAll('button,input,textarea,select')];
+  const disabled = controls.map((control) => control.disabled);
+  controls.forEach((control) => { control.disabled = true; });
+  try { return await work(); }
+  finally { controls.forEach((control,index) => { control.disabled = disabled[index]; }); delete target.dataset.busy; target.setAttribute('aria-busy','false'); }
 }
 
 async function submitCatalogForm(event, endpoint) {
   event.preventDefault();
-  const form = event.currentTarget;
-  await checkedFetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-  const message = form.querySelector(".form-message");
-  form.reset();
-  form.hidden = true;
-  message.textContent = "";
-  await loadCatalog();
+  const target = event.currentTarget;
+  const body = Object.fromEntries(new FormData(target));
+  const message = target.querySelector('.form-message');
+  await withBusyForm(target, async () => {
+    message.textContent = 'Saving…';
+    try {
+      await checkedFetch(endpoint, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      target.reset(); target.hidden = true; message.textContent = '';
+      notify(endpoint === '/api/projects' ? 'Project registered' : 'Template saved');
+      await loadCatalog();
+    } catch (error) { message.textContent = error.message; }
+  });
 }
 
-function syncTaskMode() {
-  const mode = document.querySelector("#task-mode");
-  const reviewTemplate = templates.find((item) => item.id === document.querySelector("#task-template").value)?.mode === "review";
-  if (reviewTemplate) mode.value = "review";
-  mode.disabled = reviewTemplate;
-  const isReview = mode.value === "review";
-  document.querySelector("#task-policy-title").textContent = isReview ? "Read-only review" : "Protected execution";
-  document.querySelector("#task-policy-text").textContent = isReview ? "Codex reviews an isolated snapshot and returns a report. This task cannot request write access." : "Analysis runs read-only. You must approve before Codex can modify files.";
-  document.querySelector("#start-task").textContent = isReview ? "Start review" : "Start analysis";
-}
-document.querySelectorAll("#task-mode,#task-template").forEach((control) => control.addEventListener("change", syncTaskMode));
-
-document.querySelector("#new-task").addEventListener("click", () => {
-  if (!projects.length) {
-    document.querySelector("#project-form").hidden = false;
-    document.querySelector("#catalog-panel").scrollIntoView({ behavior: "smooth" });
-    return;
-  }
-  dialog.showModal();
-});
+document.querySelector('#new-task').addEventListener('click', () => composer.open());
 document.querySelector("#notification-button").addEventListener("click", (event) => {
   event.stopPropagation();
   const popover = document.querySelector("#notification-popover");
@@ -354,10 +463,11 @@ document.querySelector("#notification-button").addEventListener("click", (event)
   event.currentTarget.setAttribute("aria-expanded", String(!popover.hidden));
 });
 document.querySelector("#notification-popover").addEventListener("click", (event) => event.stopPropagation());
-document.addEventListener("click", () => {
-  document.querySelector("#notification-popover").hidden = true;
-  document.querySelector("#notification-button").setAttribute("aria-expanded", "false");
-});
+function closeNotifications() {
+  document.querySelector('#notification-popover').hidden = true;
+  document.querySelector('#notification-button').setAttribute('aria-expanded','false');
+}
+document.addEventListener('click',closeNotifications);
 document.querySelector("#mark-notifications-read").addEventListener("click", () => {
   notifications.forEach((item) => (item.read = true));
   writeLocal(notificationStorageKey, notifications);
@@ -374,53 +484,66 @@ document.querySelectorAll("#notify-approvals,#notify-results").forEach((control)
   };
   writeLocal(notificationPreferenceKey, notificationPreferences);
 }));
-document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
 document.querySelector("#close-run-dialog").addEventListener("click", () => runDialog.close());
-document.querySelector("#cancel-dialog").addEventListener("click", () => dialog.close());
-document.querySelectorAll(".nav[data-target]").forEach((button) => button.addEventListener("click", () => {
-  document.querySelectorAll(".nav").forEach((nav) => nav.classList.remove("active"));
-  button.classList.add("active");
-  if (button.dataset.target === "top") window.scrollTo({ top: 0, behavior: "smooth" });
-  else document.querySelector(`#${button.dataset.target}`)?.scrollIntoView({ behavior: "smooth" });
-}));
-document.querySelector("#budget-settings").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const formData = new FormData(event.currentTarget);
-  const body = Object.fromEntries([...formData].map(([key, value]) => [key, Number(value)]));
-  const response = await checkedFetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const status = document.querySelector("#settings-status");
-  if (!response.ok) status.textContent = (await response.json()).error;
-  else {
-    status.textContent = "Limits saved";
-    setTimeout(() => (status.textContent = ""), 2500);
+function navigate(target) {
+  const approvals = target === 'runs-panel' && document.querySelector('#state-filter').value === 'approvals';
+  document.querySelectorAll('.nav').forEach((button) => {
+    const active = approvals ? button.id === 'approvals-nav' || button.dataset.filterNav === 'approvals' : button.dataset.target === target;
+    button.classList.toggle('active',active);
+    if (active) button.setAttribute('aria-current','location'); else button.removeAttribute('aria-current');
+  });
+  const section = document.querySelector(`#${target}`);
+  if (section) {
+    section.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+    section.tabIndex = -1; section.focus({preventScroll:true});
   }
+}
+
+document.querySelectorAll('.nav[data-target]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.target)));
+document.querySelector('#budget-settings').addEventListener('input', () => { settingsDirty = true; });
+document.querySelector('#budget-settings').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const target = event.currentTarget;
+  const body = Object.fromEntries([...new FormData(target)].map(([key,value]) => [key,Number(value)]));
+  const status = document.querySelector('#settings-status');
+  await withBusyForm(target, async () => {
+    status.textContent = 'Saving…';
+    try {
+      await checkedFetch('/api/settings',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      settingsDirty = false; status.textContent = 'Limits saved'; notify('Budget limits saved');
+    } catch (error) { status.textContent = error.message; }
+  });
 });
 document.querySelector("#show-project-form").addEventListener("click", () => (document.querySelector("#project-form").hidden = false));
 document.querySelector("#show-template-form").addEventListener("click", () => (document.querySelector("#template-form").hidden = false));
 document.querySelectorAll(".form-cancel").forEach((button) => button.addEventListener("click", () => (button.closest("form").hidden = true)));
-document.querySelectorAll("#run-search,#state-filter,#project-filter,#show-archived").forEach((control) => control.addEventListener("input", () => render(currentRuns)));
+function filterChanged() { visibleLimit = 20; render(currentRuns); }
+function clearFilters() {
+  document.querySelector('#run-search').value = ''; document.querySelector('#state-filter').value = ''; document.querySelector('#project-filter').value = ''; document.querySelector('#show-archived').checked = false; filterChanged();
+}
+function filterBy(state) { clearFilters(); document.querySelector('#state-filter').value = state; filterChanged(); navigate('runs-panel'); }
+document.querySelectorAll('#run-search,#state-filter,#project-filter,#show-archived').forEach((control) => control.addEventListener('input',filterChanged));
+document.querySelectorAll('[data-quick-filter]').forEach((button) => button.addEventListener('click', () => { document.querySelector('#state-filter').value=button.dataset.quickFilter; document.querySelector('#show-archived').checked=false; filterChanged(); }));
+document.querySelectorAll('[data-filter-nav]').forEach((button) => button.addEventListener('click', () => filterBy(button.dataset.filterNav)));
+document.querySelector('#clear-filters').addEventListener('click',clearFilters);
+document.querySelector('#empty-action').addEventListener('click', () => {
+  if (!currentRuns.length) composer.open();
+  else if (document.querySelector('#empty-action').textContent === 'Show archived tasks') { document.querySelector('#show-archived').checked = true; filterChanged(); }
+  else clearFilters();
+});
+document.querySelector('#load-more').addEventListener('click', () => { visibleLimit += 20; render(currentRuns); });
+document.addEventListener('keydown', (event) => {
+  if (event.isComposing || event.repeat) return;
+  if (event.key === 'Escape' && !dialog.open && !runDialog.open && !document.querySelector('#notification-popover').hidden) {
+    closeNotifications(); document.querySelector('#notification-button').focus(); event.preventDefault(); return;
+  }
+  if (dialog.open) { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); composer.submit(); } return; }
+  if (runDialog.open || event.metaKey || event.ctrlKey || event.altKey || event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+  if (event.key === '/') { event.preventDefault(); navigate('runs-panel'); document.querySelector('#run-search').focus({preventScroll:true}); }
+  if (event.key.toLowerCase() === 'n') { event.preventDefault(); composer.open(); }
+});
 document.querySelector("#project-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/projects"));
 document.querySelector("#template-form").addEventListener("submit", (event) => submitCatalogForm(event, "/api/templates"));
-let creatingTask = false;
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (creatingTask) return;
-  const error = document.querySelector("#form-error");
-  error.textContent = "";
-  const body = Object.fromEntries(new FormData(form));
-  creatingTask = true;
-  document.querySelector("#start-task").disabled = true;
-  try {
-    await checkedFetch("/api/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    form.reset();
-    syncTaskMode();
-    dialog.close();
-    await refresh();
-  } finally {
-    creatingTask = false;
-    document.querySelector("#start-task").disabled = false;
-  }
-});
 
 let installPrompt = null;
 const installButton = document.querySelector("#install-app");
@@ -442,6 +565,9 @@ window.addEventListener("appinstalled", () => {
 });
 
 function connectionStatus(connected) {
+  runnerConnected = connected;
+  composer.connectionChanged(connected);
+  updatePendingButtons();
   const status = document.querySelector(".local-status");
   status.classList.toggle("disconnected", !connected);
   status.querySelector("small").textContent = connected ? "Connected" : "Reconnecting…";
@@ -494,9 +620,4 @@ events.onerror = () => {
   connectionStatus(false);
 };
 
-document.querySelector("#approvals-nav").addEventListener("click", () => {
-  document.querySelector("#state-filter").value = "approvals";
-  document.querySelector("#show-archived").checked = false;
-  render(currentRuns);
-  document.querySelector(".panel").scrollIntoView({ behavior: "smooth" });
-});
+document.querySelector('#approvals-nav').addEventListener('click', () => filterBy('approvals'));

@@ -2,7 +2,27 @@
 
 A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
 
-## Latest maintenance update: v0.2.1
+## Latest update: v0.3.0 — smoother task interactions
+
+The task queue now comes first. Click a status metric or a quick filter to find running tasks, pending approvals or failures, clear filters in one step, and load history in groups of 20. Narrow windows have a compact section navigation bar.
+
+New tasks keep a browser-local draft of the selected project, template, mode and task details. Closing the form, reloading the page or reconnecting to the runner preserves that draft. Expand **Preview task instructions** to see the template applied to your text before submitting. Read-only templates lock the effective mode and restore your previous choice when you switch templates. **Clear draft** removes the saved draft; an accepted submission clears it automatically. If browser storage is unavailable, the form explains that the draft cannot be saved.
+
+Task details separate **Overview**, **Output**, **Events** and **Diff**. Approval, apply/discard, cancellation, retry and history actions are available in the detail footer. Copy an output or patch, inspect colored diff lines, and keep the selected tab and log scroll position during live updates. Busy controls prevent repeated actions, failures stay visible, and archiving provides an **Undo** action. Budget edits also survive runner reconnects.
+
+| Shortcut | Action |
+| --- | --- |
+| `N` | Open a new task when you are not typing in a field |
+| `/` | Focus task search when you are not typing in a field |
+| `Ctrl+Enter` / `Cmd+Enter` | Submit the open task form |
+| `Esc` | Close a dialog or notification popover; task submission must finish first |
+| `←` / `→`, `Home` / `End` | Switch focused task-detail tabs |
+
+Stop the current runner, run `git pull --ff-only`, then `npm start`. Use **Reload** if the browser reports an interface update. This update adds no dependencies and does not require downloading Electron for browser mode. Projects, budgets and task history remain compatible.
+
+Validation includes 47 passing Node tests, including draft/selection retention and submission behavior using a small form adapter. JavaScript syntax and HTML structure were checked. Real browser interaction and visual verification were unavailable in the development environment; native installers were not built for this source update.
+
+## v0.2.1: complete approval patches and baseline retries
 
 Approval diffs now compare the final worktree to the commit saved when the task started. They include staged and committed agent changes, new files and binary changes. This avoids reporting "no file changes" after an agent runs `git add` or `git commit`. Git's [commit-to-worktree comparison](https://git-scm.com/docs/git-diff) supplies the complete patch.
 
