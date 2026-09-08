@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 — 2026-09-08
+
+- Added event search, pause/resume display, new-event counts and jump-to-latest controls. Pausing holds the displayed snapshot while the runner continues; the live buffer retains at most 500 events. Duplicate equal events are counted individually. Search survives live updates and resets when opening a different task.
+- Kept retained log rows and unchanged output/diff content in the DOM instead of replacing the entire detail panel on each event. Added independent tab reading positions, hidden-region-aware scroll restoration and a focus fallback when the original task card is no longer present. The workflow timeline is now expandable.
+- Fixed Tasks/Mission Control navigation retaining an earlier approval filter. Quick-filter and archive changes now update navigation state. Global shortcuts respect all editable content. Added narrow-window styles for event controls and the Settings scroll target.
+- Fixed macOS integration-test teardown by canonicalizing its temporary directory before comparing paths returned by Git. All functional subtests had passed; the `/var` versus `/private/var` mismatch caused cleanup to misidentify the main worktree.
+- Added five dependency-free tests for frozen snapshots, rolling-buffer and duplicate-event counts, search/reset behavior, retained rows, manual scroll control and unambiguous action-focus restoration. All 52 local Node tests pass; frontend syntax, HTML structure and asset checks pass. The element adapter does not verify native browser layout, selection or focus behavior; real-browser preview was unavailable.
+
+This source update adds no dependencies or data migration and does not publish native installers. Restart the runner and reload the interface after pulling it.
+
 ## 0.3.0 — 2026-09-08
 
 - Added browser-local task drafts, template instruction previews, an explicit clear-draft action and mode selection that survives template changes and reconnects. Failed submissions retain inputs; duplicate submissions are blocked until the request finishes.

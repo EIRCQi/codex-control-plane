@@ -1,6 +1,7 @@
 import { setupTaskComposer } from "./task-composer.js";
 import { notify } from "./feedback.js";
-import { captureView, restoreView, createRunList } from "./live-view.js";
+import { captureView, restoreView, createRunList, updateMarkup } from "./live-view.js";
+import { createEventViewer } from "./event-viewer.js";
 import { setupEnvironment } from "./environment.js";
 import { agentOutput } from "./run-output.js";
 import { notificationForTransition } from "./notifications.js";
@@ -13,11 +14,14 @@ let currentRuns = [];
 let runnerConnected = false;
 let visibleLimit = 20;
 let detailTab = "overview";
+const detailTabViews = new Map();
+let currentSection = 'runs-panel';
 let settingsDirty = false;
 let detailRunId = null;
 let renderedDetailRun = null;
 let projects = [];
 let templates = [];
+const eventViewer = createEventViewer(document.querySelector('#event-viewer'), {isActive: () => runDialog.open && detailTab === 'events'});
 const notificationStorageKey = "codex-control-plane.notifications.v1";
 const notificationPreferenceKey = "codex-control-plane.notification-preferences.v1";
 let notifications = readLocal(notificationStorageKey, []);
@@ -218,6 +222,11 @@ function updatePendingButtons() {
 }
 
 function setDetailTab(name, focus = false) {
+  const changed = name !== detailTab;
+  if (changed && runDialog.open) {
+    detailTabViews.set(detailTab, {...captureView(runDialog), focus:null});
+    if (detailTab === 'events') eventViewer.deactivate();
+  }
   detailTab = name;
   runDialog.querySelectorAll('[data-detail-tab]').forEach((button) => {
     const selected = button.dataset.detailTab === name;
@@ -225,6 +234,12 @@ function setDetailTab(name, focus = false) {
     if (focus && selected) button.focus();
   });
   runDialog.querySelectorAll('[data-tab-panel]').forEach((panel) => { panel.hidden = panel.dataset.tabPanel !== name; });
+  if (changed) {
+    const previous = detailTabViews.get(name);
+    if (previous) restoreView(runDialog, previous);
+    else runDialog.scrollTop = 0;
+  }
+  if (name === 'events') eventViewer.activate();
 }
 runDialog.querySelector('[role="tablist"]').addEventListener('click', (event) => {
   const button = event.target.closest('[data-detail-tab]');
@@ -244,7 +259,12 @@ runDialog.querySelector('[role="tablist"]').addEventListener('keydown', (event) 
 function openRunDetail(run) {
   if (!run) return;
   const preserve = runDialog.open && detailRunId === run.id;
-  if (!preserve) { detailTab = run.state === 'awaiting_merge' ? 'diff' : run.state === 'awaiting_approval' ? 'output' : 'overview'; document.querySelector('#detail-error').textContent = ''; }
+  if (!preserve) {
+    detailTabViews.clear();
+    detailTab = run.state === 'awaiting_merge' ? 'diff' : run.state === 'awaiting_approval' ? 'output' : 'overview';
+    document.querySelector('#detail-error').textContent = '';
+    document.querySelector('.workflow-history').open = false;
+  }
   detailRunId = run.id;
   renderRunDetail(run, preserve);
   if (!runDialog.open) runDialog.showModal();
@@ -262,40 +282,45 @@ function detailActions(run) {
 
 function renderRunDetail(run, preserve = true) {
   const previous = preserve ? captureView(runDialog) : null;
+  const previousRun = renderedDetailRun;
   renderedDetailRun = run;
   const usage = run.usage || {};
   const nextSteps = {queued:'Waiting for an available execution slot.',running:'Codex is working. Follow its progress in Events.',approved:'Implementation is approved and waiting to start.',awaiting_approval:'Read the analysis in Output, then approve implementation when you are ready.',awaiting_merge:'Review the Diff tab before applying these changes to your repository.',completed:'The task is complete. Read the result in Output.',failed:'Review the error and events, then retry when the issue is resolved.',cancelled:'This task was cancelled. You can retry or archive it.',budget_exceeded:'Update your budget in Settings before retrying this task.',discarded:'The isolated changes have been discarded.'};
-  document.querySelector("#detail-title").textContent = run.prompt;
-  document.querySelector("#run-detail").innerHTML = `
-    <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
-      <p class="next-step">${escapeHtml(nextSteps[run.state] || '')}</p>
-      <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</strong></div><div><span>Task mode</span><strong>${run.mode === 'review' ? 'Read-only review' : 'Implementation'}</strong></div></div>
-      <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
-      ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ''}
-      <p class="detail-created">Created ${new Date(run.createdAt).toLocaleString()}</p>
-    </section>
-    <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0">
-      <div class="content-toolbar"><h3>${run.mode === 'review' ? 'Review report' : 'Agent output'}</h3><button type="button" class="secondary" data-copy="output" ${run.output?'':'disabled'}>Copy output</button></div>
-      ${run.output ? `<pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre>` : '<p class="tab-empty">The report will appear when this phase completes. Follow live progress in Events.</p>'}
-    </section>
-    <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0">
-      <h3>Workflow timeline</h3><div class="timeline">${run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join("")}</div>
-      <div class="content-toolbar"><h3>Codex events · ${run.logs?.length || 0}</h3></div>
-      ${run.logs?.length ? `<div class="log-lines detail-logs" data-view="detail-logs" data-follow="true">${run.logs.map((log) => `<div><time>${new Date(log.at).toLocaleTimeString()}</time><b>${escapeHtml(log.type)}</b><span>${escapeHtml(log.message)}</span></div>`).join("")}</div>` : '<p class="tab-empty">No Codex events yet.</p>'}
-    </section>
-    <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0">
-      <div class="content-toolbar"><h3>Proposed changes</h3><button type="button" class="secondary" data-copy="diff" ${run.diff?'':'disabled'}>Copy patch</button></div>
-      ${run.diff ? `<p class="diff-summary">${escapeHtml(run.diffStat || '')}</p><pre class="diff" data-view="detail-diff">${run.diff.split('\n').map((line) => `<span class="${line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':line.startsWith('@@')?'diff-hunk':''}">${escapeHtml(line)}</span>`).join('\n')}</pre>` : `<p class="tab-empty">${run.mode === 'review' ? 'Read-only reviews do not produce a patch.' : 'A diff appears here after approved implementation produces changes.'}</p>`}
-    </section>`;
+  const title = document.querySelector('#detail-title');
+  if (title.textContent !== run.prompt) title.textContent = run.prompt;
+  updateMarkup(document.querySelector('#detail-overview-body'), `
+    <p class="next-step">${escapeHtml(nextSteps[run.state] || '')}</p>
+    <div class="detail-meta"><div><span>Status</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>Project</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "Unregistered")}</strong></div><div><span>Repository</span><strong title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</strong></div><div><span>Task mode</span><strong>${run.mode === 'review' ? 'Read-only review' : 'Implementation'}</strong></div></div>
+    <div class="detail-usage"><div><span>Total tokens</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>Input / cached</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>Output</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>Runtime</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>Model</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
+    ${run.error ? `<p class="error">${escapeHtml(run.error)}</p>` : ''}
+    <p class="detail-created">Created ${new Date(run.createdAt).toLocaleString()}</p>`);
+  if (!previousRun || previousRun.output !== run.output || previousRun.mode !== run.mode) {
+    document.querySelector('#detail-output-title').textContent = run.mode === 'review' ? 'Review report' : 'Agent output';
+    document.querySelector('[data-copy="output"]').disabled = !run.output;
+    updateMarkup(document.querySelector('#detail-output-body'), run.output
+      ? `<pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre>`
+      : '<p class="tab-empty">The report will appear when this phase completes. Follow live progress in Events.</p>');
+  }
+  updateMarkup(document.querySelector('#detail-timeline'), run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString()}</time><div><strong>${escapeHtml(event.type)}</strong><p>${escapeHtml(event.message)}</p></div></article>`).join(''));
+  eventViewer.update(run);
+  if (!previousRun || previousRun.diff !== run.diff || previousRun.diffStat !== run.diffStat || previousRun.mode !== run.mode) {
+    document.querySelector('[data-copy="diff"]').disabled = !run.diff;
+    updateMarkup(document.querySelector('#detail-diff-body'), run.diff
+      ? `<p class="diff-summary">${escapeHtml(run.diffStat || '')}</p><pre class="diff" data-view="detail-diff">${run.diff.split('\n').map((line) => `<span class="${line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':line.startsWith('@@')?'diff-hunk':''}">${escapeHtml(line)}</span>`).join('\n')}</pre>`
+      : `<p class="tab-empty">${run.mode === 'review' ? 'Read-only reviews do not produce a patch.' : 'A diff appears here after approved implementation produces changes.'}</p>`);
+  }
   const footer = document.querySelector('#detail-actions');
-  const markup = detailActions(run);
-  if (footer.dataset.markup !== markup) { footer.innerHTML = markup; footer.dataset.markup = markup; }
+  updateMarkup(footer, detailActions(run));
   setDetailTab(detailTab);
   if (previous) restoreView(runDialog, previous);
   else runDialog.scrollTop = 0;
   updatePendingButtons();
 }
-runDialog.addEventListener("close", () => { detailRunId = null; renderedDetailRun = null; });
+runDialog.addEventListener("close", () => {
+  detailRunId = null; renderedDetailRun = null; detailTabViews.clear();
+  // A live update may have replaced the card that originally opened the dialog.
+  if (!document.activeElement || document.activeElement === document.body) document.querySelector('#run-search').focus({preventScroll:true});
+});
 
 function runCard(run) {
   const isReview = run.mode === "review";
@@ -485,13 +510,17 @@ document.querySelectorAll("#notify-approvals,#notify-results").forEach((control)
   writeLocal(notificationPreferenceKey, notificationPreferences);
 }));
 document.querySelector("#close-run-dialog").addEventListener("click", () => runDialog.close());
-function navigate(target) {
-  const approvals = target === 'runs-panel' && document.querySelector('#state-filter').value === 'approvals';
+function syncNavigation() {
+  const approvals = currentSection === 'runs-panel' && document.querySelector('#state-filter').value === 'approvals' && !document.querySelector('#show-archived').checked;
   document.querySelectorAll('.nav').forEach((button) => {
-    const active = approvals ? button.id === 'approvals-nav' || button.dataset.filterNav === 'approvals' : button.dataset.target === target;
+    const active = approvals ? button.id === 'approvals-nav' || button.dataset.filterNav === 'approvals' : button.dataset.target === currentSection;
     button.classList.toggle('active',active);
     if (active) button.setAttribute('aria-current','location'); else button.removeAttribute('aria-current');
   });
+}
+function navigate(target) {
+  currentSection = target;
+  syncNavigation();
   const section = document.querySelector(`#${target}`);
   if (section) {
     section.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
@@ -499,7 +528,10 @@ function navigate(target) {
   }
 }
 
-document.querySelectorAll('.nav[data-target]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.target)));
+document.querySelectorAll('.nav[data-target]').forEach((button) => button.addEventListener('click', () => {
+  if (button.dataset.target === 'runs-panel') clearFilters();
+  navigate(button.dataset.target);
+}));
 document.querySelector('#budget-settings').addEventListener('input', () => { settingsDirty = true; });
 document.querySelector('#budget-settings').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -517,7 +549,7 @@ document.querySelector('#budget-settings').addEventListener('submit', async (eve
 document.querySelector("#show-project-form").addEventListener("click", () => (document.querySelector("#project-form").hidden = false));
 document.querySelector("#show-template-form").addEventListener("click", () => (document.querySelector("#template-form").hidden = false));
 document.querySelectorAll(".form-cancel").forEach((button) => button.addEventListener("click", () => (button.closest("form").hidden = true)));
-function filterChanged() { visibleLimit = 20; render(currentRuns); }
+function filterChanged() { visibleLimit = 20; currentSection = 'runs-panel'; syncNavigation(); render(currentRuns); }
 function clearFilters() {
   document.querySelector('#run-search').value = ''; document.querySelector('#state-filter').value = ''; document.querySelector('#project-filter').value = ''; document.querySelector('#show-archived').checked = false; filterChanged();
 }
@@ -538,7 +570,7 @@ document.addEventListener('keydown', (event) => {
     closeNotifications(); document.querySelector('#notification-button').focus(); event.preventDefault(); return;
   }
   if (dialog.open) { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); composer.submit(); } return; }
-  if (runDialog.open || event.metaKey || event.ctrlKey || event.altKey || event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+  if (runDialog.open || event.metaKey || event.ctrlKey || event.altKey || event.target.isContentEditable || event.target.closest?.('input,textarea,select')) return;
   if (event.key === '/') { event.preventDefault(); navigate('runs-panel'); document.querySelector('#run-search').focus({preventScroll:true}); }
   if (event.key.toLowerCase() === 'n') { event.preventDefault(); composer.open(); }
 });
@@ -595,6 +627,7 @@ if ("serviceWorker" in navigator) {
 }
 
 connectionStatus(false);
+syncNavigation();
 renderNotifications();
 const events = new EventSource("/api/events");
 events.onopen = () => {

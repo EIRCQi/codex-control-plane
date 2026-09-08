@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 // These checks use real Git patches and a local fixture, without model requests.
 test('approval patches include staged, committed and mixed changes; retries restore the original baseline', {skip:process.platform === 'win32', timeout:30000}, async (t) => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'ccp-changes-'));
+  // macOS exposes /var through /private/var; Git reports the canonical path.
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), 'ccp-changes-')));
   const repo = path.join(dir, 'repo');
   const bin = path.join(dir, 'bin');
   await mkdir(repo); await mkdir(bin);

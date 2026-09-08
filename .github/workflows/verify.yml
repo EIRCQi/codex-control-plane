@@ -24,3 +24,4 @@ jobs:
       - run: node --check public/task-composer.js
       - run: node --check public/feedback.js
       - run: node --check public/live-view.js
+      - run: node --check public/event-viewer.js

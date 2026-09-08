@@ -163,7 +163,27 @@
           <button type="button" id="tab-events" role="tab" data-detail-tab="events" aria-controls="detail-events" aria-selected="false" tabindex="-1">Events</button>
           <button type="button" id="tab-diff" role="tab" data-detail-tab="diff" aria-controls="detail-diff" aria-selected="false" tabindex="-1">Diff</button>
         </div>
-        <div id="run-detail"></div>
+        <div id="run-detail">
+          <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0"><div id="detail-overview-body"></div></section>
+          <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
+            <div class="content-toolbar"><h3 id="detail-output-title">Agent output</h3><button type="button" class="secondary" data-copy="output" disabled>Copy output</button></div>
+            <div id="detail-output-body"></div>
+          </section>
+          <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
+            <details class="workflow-history"><summary>Workflow timeline</summary><div id="detail-timeline" class="timeline"></div></details>
+            <div id="event-viewer">
+              <div class="content-toolbar"><h3>Codex events</h3><div class="event-actions"><button type="button" class="secondary" data-event-pause aria-pressed="false">Pause display</button><button type="button" class="secondary" data-event-latest>Jump to latest</button></div></div>
+              <label class="event-search">Search events<input type="search" data-event-search placeholder="Filter by event type or message…" /></label>
+              <div class="event-reading-state"><span data-event-count></span><p data-event-status role="status"></p></div>
+              <div class="log-lines detail-logs" data-event-lines tabindex="0" role="region" aria-label="Codex event log"></div>
+              <p class="tab-empty" data-event-empty>No Codex events yet.</p>
+            </div>
+          </section>
+          <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0" hidden>
+            <div class="content-toolbar"><h3>Proposed changes</h3><button type="button" class="secondary" data-copy="diff" disabled>Copy patch</button></div>
+            <div id="detail-diff-body"></div>
+          </section>
+        </div>
         <div class="detail-footer"><p id="detail-error" class="error" role="alert"></p><div id="detail-actions" class="detail-actions"></div></div>
       </div>
     </dialog>

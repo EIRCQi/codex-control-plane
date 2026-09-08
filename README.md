@@ -2,7 +2,19 @@
 
 A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
 
-## Latest update: v0.3.0 — smoother task interactions
+## Latest update: v0.3.1 — read live events at your own pace
+
+The **Events** tab now has message/type search, **Pause display**, **Resume display** and **Jump to latest** controls. Pausing freezes the displayed snapshot while the task continues running; the interface reports how many newer events remain available in the latest 500-event buffer. Search stays active as events arrive. Scrolling back stops automatic following; **Jump to latest** resumes it. The workflow timeline is expandable above the log viewer.
+
+Existing event rows, unchanged output and unchanged diffs remain in place during live updates, reducing interrupted text selection and unnecessary rendering. Detail tabs keep separate reading positions. Returning to **Tasks / Mission Control** clears previous queue filters, and the active navigation indicator follows quick filters and archive selection. Keyboard shortcuts respect editable content.
+
+This update also corrects a macOS test-cleanup path mismatch between `/var` and `/private/var`, which had caused the fixture to attempt removing its own main worktree after the functional tests passed.
+
+The 52 Node tests cover runtime behavior and frontend controller state, including pause/resume, the rolling event buffer, duplicate events, retained row identity and action-focus matching. JavaScript syntax, HTML nesting, tab targets and static asset paths were also checked. Controller tests use an element adapter; actual browser layout, native focus and visual behavior remain unverified because local browser preview was unavailable. Native installers were not built.
+
+Stop the current runner, run `git pull --ff-only`, then `npm start` and reload the dashboard. No new dependencies or data migration are required; browser mode does not need an Electron download.
+
+## v0.3.0 — smoother task interactions
 
 The task queue now comes first. Click a status metric or a quick filter to find running tasks, pending approvals or failures, clear filters in one step, and load history in groups of 20. Narrow windows have a compact section navigation bar.
 
