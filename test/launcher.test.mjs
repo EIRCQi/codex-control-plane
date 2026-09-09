@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import http, { Agent, createServer } from 'node:http';
 import { EventEmitter, once } from 'node:events';
 import { applicationId, inspectRunner, selectRunner, openDashboard, runnerUrl } from '../lib/launcher.mjs';
 
@@ -50,7 +50,45 @@ test('an unused port starts an owned Runner; port zero returns the actual bound 
 
 test('an unresponsive local listener times out without being stopped', async t => {
   const endpoint = await server(t, () => {});
-  await assert.rejects(inspectRunner(endpoint.url, {timeoutMs:30}), /not responding/);
+  await assert.rejects(inspectRunner(endpoint.url, {timeoutMs:30}), {code:'RUNNER_PROBE_TIMEOUT'});
+  assert.equal(endpoint.http.listening, true);
+});
+
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+const nativeProxySupported = nodeMajor > 24 || (nodeMajor === 24 && nodeMinor >= 5) || (nodeMajor === 22 && nodeMinor >= 21);
+test('loopback probes bypass a configured global HTTP proxy without changing it', {skip:!nativeProxySupported}, async t => {
+  let localRequests = 0, proxyRequests = 0;
+  const local = await server(t, (_req, res) => { localRequests++; res.end(JSON.stringify({app:applicationId, ready:true, version:'0.4.1'})); });
+  const proxy = await server(t, (_req, res) => { proxyRequests++; res.writeHead(503); res.end('proxy fixture'); });
+  const original = http.globalAgent;
+  const configured = new Agent({proxyEnv:{HTTP_PROXY:proxy.url, NO_PROXY:''}});
+  http.globalAgent = configured;
+  t.after(() => { http.globalAgent = original; configured.destroy(); });
+  // First establish that the ordinary global client really goes through the proxy.
+  await new Promise((resolve, reject) => {
+    http.get(local.url, res => { res.resume(); res.on('end', resolve); }).on('error', reject);
+  });
+  assert.equal(proxyRequests, 1); assert.equal(localRequests, 0);
+  assert.equal((await inspectRunner(local.url)).ready, true);
+  assert.equal(proxyRequests, 1); assert.equal(localRequests, 1); assert.equal(http.globalAgent, configured);
+});
+
+test('a healthy Runner slower than the old two-second limit can still be reused', {timeout:10000}, async t => {
+  const endpoint = await server(t, (_req, res) => {
+    const timer = setTimeout(() => res.end(JSON.stringify({app:applicationId, ready:true, version:'0.4.1'})), 2200);
+    res.on('close', () => clearTimeout(timer));
+  });
+  const selected = await selectRunner({port:endpoint.port, start:() => assert.fail('healthy Runner must be reused')});
+  assert.equal(selected.reused, true);
+});
+
+test('continuous partial responses cannot extend the overall probe deadline', {timeout:3000}, async t => {
+  const endpoint = await server(t, (_req, res) => {
+    res.write('{');
+    const timer = setInterval(() => res.write(' '), 5);
+    res.on('close', () => clearInterval(timer));
+  });
+  await assert.rejects(inspectRunner(endpoint.url, {timeoutMs:100}), {code:'RUNNER_PROBE_TIMEOUT'});
   assert.equal(endpoint.http.listening, true);
 });
 

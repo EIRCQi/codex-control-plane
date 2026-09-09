@@ -14,5 +14,6 @@ try {
   console.log(selected.url);
 } catch (error) {
   console.error(error.message);
+  console.error('Run npm run status for a read-only health and listening-process report.');
   process.exitCode = 1;
 }

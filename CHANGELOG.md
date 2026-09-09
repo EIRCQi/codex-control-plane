@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 — 2026-09-09
+
+- Fixed local health probes inheriting Node's global HTTP proxy. Reproduced on Node 24.19.0 with a healthy loopback server and a nonresponding proxy; the old launcher contacted the proxy and falsely timed out. A dedicated direct HTTP agent now handles loopback checks without changing Codex/Git proxy settings or the environment.
+- Increased the probe allowance from two to five seconds and replaced the socket inactivity timeout with a total deadline. Slow healthy Runners can be reused; connecting or continuously receiving partial data cannot extend the deadline indefinitely. Timeout errors distinguish an accepted TCP connection from an inability to connect.
+- Added dependency-free `npm run status` diagnostics and linked it from launcher errors. macOS/Linux reports include listening PIDs and process states using read-only `lsof`/`ps` calls, with recovery guidance for suspended jobs. Process arguments and environment values are not reported. Windows receives a PowerShell listener-inspection command. No automatic process termination or fallback Runner is introduced.
+- Added five regression tests for native proxy isolation, slow responses, partial-response deadlines and port diagnostics. All 74 local Node tests pass. This source-only fix adds no dependencies, migration or native installer publication; the user's actual Mac listener still needs local verification if it remains unresponsive.
+
 ## 0.4.0 — 2026-09-09
 
 - Added a Quick start panel for environment checks, ChatGPT sign-in and project/task entry. Login progress streams over SSE; duplicate clicks are guarded, stale HTTP replies cannot overwrite newer state, and reconnects or environment checks refresh credential status.

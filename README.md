@@ -2,7 +2,26 @@
 
 A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
 
-## Latest update: v0.4.0 — open the dashboard and connect Codex
+## Latest update: v0.4.1 — reliable local Runner detection
+
+Fixed a reproduced Node 24.19.0 case where a healthy local Runner was reported as unresponsive because the health request used Node's globally configured HTTP proxy. Loopback probes now use a separate direct agent. Codex/Git proxy settings and the process environment are unchanged. Node documents how proxy settings affect the global agent in its [HTTP proxy documentation](https://nodejs.org/api/http.html#built-in-proxy-support).
+
+The probe now allows five seconds instead of two and has a total deadline, including connecting and reading partial responses. An occupied or unrecognized port still prevents a second Runner from starting. Run `git pull --ff-only` and `npm run open` to use the fixed launcher; a healthy running v0.4.0 service can be reused.
+
+If opening still fails, run **`npm run status`**. This read-only command checks `/api/health` directly and, on macOS/Linux, shows the listening process PID, parent PID, state and command name. It does not print command arguments or environment values and never signals processes. Windows users receive a PowerShell listener-inspection command.
+
+A process in state **T** is suspended. In the terminal that started it, run `jobs -l`, find the job with that PID, and resume that job with `fg %N` (replace `N` with its job number). Press Ctrl+C there if you want to stop it. An Electron-owned Runner can be stopped with its tray **Quit** action. If the process belongs to another application, use that application's own controls.
+
+You can also check the health endpoint independently on macOS:
+
+```bash
+curl --noproxy '*' --max-time 5 http://127.0.0.1:4310/api/health
+lsof -nP -iTCP:4310 -sTCP:LISTEN
+```
+
+All 74 local Node tests pass, including configured-proxy isolation, responses slower than two seconds, partial-response deadlines and suspended-process diagnostics. This reproduces a possible cause of the timeout; it does not establish why a particular machine's listener is unresponsive. No dependencies or data migrations were added.
+
+## v0.4.0 — open the dashboard and connect Codex
 
 Run `npm run open`, or double-click **Start-Control-Plane.command** on macOS. The launcher opens the browser and reuses a recognized local Runner if one is already listening. Otherwise it starts a Runner in the current terminal; keep that terminal open and use Ctrl+C to stop it and its tasks. Browser mode needs no `npm install` or Electron download.
 
