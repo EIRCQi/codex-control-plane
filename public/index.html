@@ -49,6 +49,15 @@
       </header>
       <p id="connection-banner" class="connection-banner" role="status">Connecting to local Runner… If it is stopped, run npm start and leave it running.</p>
       <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="Dismiss error">×</button></div>
+      <section id="setup-panel" class="setup-panel" aria-labelledby="setup-title">
+        <div class="setup-heading"><div><p class="eyebrow">QUICK START</p><h2 id="setup-title">Get ready to run Codex</h2></div><span id="login-status" class="setup-status" role="status">Login not checked</span></div>
+        <div class="setup-steps">
+          <div><span class="setup-number">1</span><div><strong>Check environment</strong><p id="setup-tools-state">Checking local tools…</p></div><button type="button" class="secondary" id="setup-environment">Environment</button></div>
+          <div><span class="setup-number">2</span><div><strong>Connect Codex</strong><p id="setup-account-state">Connect your Codex account</p></div><div class="login-actions"><button type="button" class="primary" id="login-codex">Sign in with ChatGPT</button><button type="button" class="secondary" id="cancel-login" hidden>Cancel login</button><button type="button" class="text-button" id="refresh-login">Check login</button></div></div>
+          <div><span class="setup-number">3</span><div><strong>Choose a project</strong><p id="setup-project-state">Register a local Git repository</p></div><button type="button" class="secondary" id="setup-project">Add project</button></div>
+        </div>
+        <div class="login-guidance"><p id="login-message"></p><a id="login-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" hidden>Open sign-in page ↗</a><p id="login-error" class="error" role="alert"></p><details><summary>Need help signing in?</summary><p>Install Codex CLI, then use Sign in with ChatGPT. If the browser flow does not finish, run <code>codex login</code> in your terminal and click Check login here. Saved credentials stay with Codex.</p><a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener noreferrer">Install Codex CLI ↗</a> · <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener noreferrer">Login help ↗</a></details></div>
+      </section>
       <section class="metrics">
         <button class="metric-action" data-filter-nav="active"><span>Active runs</span><strong id="active-runs">0</strong><small>View running tasks →</small></button>
         <button class="metric-action" data-filter-nav="approvals"><span>Needs approval</span><strong id="needs-approval">0</strong><small>Review pending actions →</small></button>

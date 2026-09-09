@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-09-09
+
+- Added a Quick start panel for environment checks, ChatGPT sign-in and project/task entry. Login progress streams over SSE; duplicate clicks are guarded, stale HTTP replies cannot overwrite newer state, and reconnects or environment checks refresh credential status.
+- Added local-only login/status/refresh/cancel endpoints using the installed Codex CLI. Existing credentials are reused; successful browser login is confirmed with a status probe. Cancellation and a three-minute timeout terminate the owned login process, with forced termination after a three-second grace period. Runner shutdown waits for login cleanup. Starting tasks or changing executable paths is blocked during login; active/queued tasks prevent starting login.
+- Kept authentication output out of app data and API responses. Only sanitized status and a validated OpenAI browser authorization request URL are exposed in memory. Credentials remain managed by Codex. Cancellation never logs out or deletes saved credentials.
+- Added dependency-free `npm run open` and an executable macOS `Start-Control-Plane.command` entry point. Known local Runners are reused; otherwise the launcher starts one in the current terminal and opens the browser. Added application identity/readiness to health responses. Older/unrelated, unready and unresponsive listeners receive actionable errors and are never stopped by the launcher.
+- Updated Electron to attach to a recognized existing Runner. Its tray distinguishes closing an attached window from stopping an owned Runner, preserving tasks in the existing service. External navigation uses the system browser for HTTP(S) links.
+- Added 17 tests for login lifecycle, simulated-CLI HTTP authorization, task exclusion, redaction, launcher ownership, malformed port responses, frontend duplicate clicks and reconnect races. All 69 local Node tests pass, plus syntax and static HTML/asset checks. Real account authorization, native Electron/macOS behavior and browser layout remain unverified in this environment.
+
+No new dependencies, data migration or native installer publication. Quit a pre-v0.4.0 Runner once before pulling this update, then use `npm run open`; later opens can reuse the running service.
+
 ## 0.3.1 — 2026-09-08
 
 - Added event search, pause/resume display, new-event counts and jump-to-latest controls. Pausing holds the displayed snapshot while the runner continues; the live buffer retains at most 500 events. Duplicate equal events are counted individually. Search survives live updates and resets when opening a different task.

@@ -114,3 +114,15 @@ fieldset { min-width:0; border:0; margin:0; padding:0; }.task-preview { margin-t
 [data-event-lines]:empty { display:none; }
 @media(max-width:850px) { #budget-settings { scroll-margin-top:80px; } }
 @media(max-width:520px) { #event-viewer .content-toolbar { align-items:flex-start; flex-direction:column; }.event-actions { width:100%; }.event-actions button { flex:1; min-height:44px; }.event-search input { min-height:44px; } }
+
+.setup-panel { margin-top:22px; padding:20px; border:1px solid #35505a; border-radius:14px; background:linear-gradient(135deg,#13242c,#10171f); }
+.setup-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:18px; }.setup-heading h2 { font-size:18px; }
+.setup-status { font-size:12px; border:1px solid currentColor; padding:6px 10px; border-radius:18px; }
+.setup-steps { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:14px; }.setup-steps>div { display:flex; align-items:flex-start; flex-wrap:wrap; gap:10px; min-width:0; padding:14px; background:#0b141bc0; border:1px solid var(--line); border-radius:10px; }
+.setup-steps strong { font-size:13px; }.setup-steps p { margin-top:5px; color:var(--muted); font-size:11px; }.setup-steps>div>button,.login-actions { margin-left:32px; }
+.setup-number { display:grid; place-items:center; width:22px; height:22px; border:1px solid #42665d; border-radius:50%; color:var(--cyan); font-size:11px; flex-shrink:0; }
+.login-actions { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }.login-actions button { min-height:36px; }
+.login-guidance { margin-top:14px; font-size:12px; line-height:1.7; color:var(--muted); }.login-guidance a { color:var(--cyan); }.login-guidance details { margin-top:7px; }.login-guidance .error:empty { display:none; }
+.setup-panel[data-ready="true"] { border-color:#42665d; }
+@media(max-width:1100px) { .setup-steps { grid-template-columns:1fr; }.setup-steps>div { align-items:center; }.setup-steps>div>button,.login-actions { margin-left:auto; } }
+@media(max-width:520px) { .setup-panel { padding:16px; }.setup-steps>div { gap:10px; }.login-actions { width:100%; margin-left:32px; }.setup-steps button { min-height:44px; } }

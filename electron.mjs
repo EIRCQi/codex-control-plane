@@ -2,10 +2,12 @@ import { app, BrowserWindow, Menu, Tray, nativeImage, shell, dialog } from "elec
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { desktopWindowOptions, trayMenu } from "./lib/desktop.mjs";
+import { selectRunner } from './lib/launcher.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const iconPath = path.join(root, "build", "icon.png");
-const url = `http://127.0.0.1:${Number(process.env.PORT || 4310)}`;
+let url;
+let reusedRunner = false;
 const hasLock = app.requestSingleInstanceLock();
 let window = null;
 let tray = null;
@@ -22,7 +24,7 @@ function showWindow() {
 
 function rebuildTrayMenu() {
   if (!tray) return;
-  const definitions = trayMenu({ visible: Boolean(window?.isVisible()) });
+  const definitions = trayMenu({ visible: Boolean(window?.isVisible()), reused:reusedRunner });
   tray.setContextMenu(Menu.buildFromTemplate(definitions.map((item) => {
     if (!item.id) return item;
     if (item.id === "toggle") return { ...item, click: () => window?.isVisible() ? window.hide() : showWindow() };
@@ -34,9 +36,14 @@ function rebuildTrayMenu() {
 
 async function start() {
   process.env.CODEX_CONTROL_PLANE_DATA_DIR = path.join(app.getPath("userData"), "data");
-  const { serverReady, shutdown } = await import("./server.mjs");
-  shutdownRunner = shutdown;
-  await serverReady;
+  const selected = await selectRunner({port:Number(process.env.PORT || 4310), start:async () => {
+    const {serverReady, shutdown} = await import('./server.mjs');
+    const ready = await serverReady;
+    return {url:ready.url, shutdown};
+  }});
+  url = selected.url;
+  shutdownRunner = selected.shutdown;
+  reusedRunner = selected.reused;
   const icon = nativeImage.createFromPath(iconPath);
   window = new BrowserWindow(desktopWindowOptions(icon));
   window.removeMenu();
@@ -50,15 +57,20 @@ async function start() {
   window.on("hide", rebuildTrayMenu);
   window.once("ready-to-show", showWindow);
   window.webContents.setWindowOpenHandler(({ url: target }) => {
-    void shell.openExternal(target);
+    if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
     return { action: "deny" };
+  });
+  window.webContents.on('will-navigate', (event, target) => {
+    if (target === url || target === `${url}/`) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
   });
   await window.loadURL(url);
 
   const trayIcon = icon.resize({ width: process.platform === "darwin" ? 18 : 22, height: process.platform === "darwin" ? 18 : 22 });
   if (process.platform === "darwin") trayIcon.setTemplateImage(true);
   tray = new Tray(trayIcon);
-  tray.setToolTip("Codex Control Plane · Local runner active");
+  tray.setToolTip(reusedRunner ? 'Codex Control Plane · Connected to existing Runner' : 'Codex Control Plane · Local runner active');
   tray.on("click", () => window?.isVisible() ? window.hide() : showWindow());
   rebuildTrayMenu();
 }

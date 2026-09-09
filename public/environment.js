@@ -1,4 +1,4 @@
-export function setupEnvironment({ request, escapeHtml }) {
+export function setupEnvironment({ request, escapeHtml, onReport = () => {} }) {
   const panel = document.querySelector('#environment-panel');
   const form = document.querySelector('#runtime-settings');
   const refreshButton = document.querySelector('#refresh-environment');
@@ -19,6 +19,7 @@ export function setupEnvironment({ request, escapeHtml }) {
       return `<article><div><h3>${title}</h3><span class="check-status ${entry.status === 'ok' ? 'ok' : 'attention'}">${label}</span></div>${entry.version ? `<strong>${escapeHtml(entry.version)}</strong>` : ''}${entry.command || entry.path ? `<code>${escapeHtml(entry.command || entry.path)}</code>` : ''}<p>${escapeHtml(entry.hint)}</p></article>`;
     }).join('');
     document.querySelector('#environment-meta').textContent = `Node ${report.node} · ${report.platform}/${report.arch} · Checked ${new Date(report.checkedAt).toLocaleTimeString()}`;
+    onReport(report);
   }
 
   function busy(value) {

@@ -2,6 +2,7 @@ import { setupTaskComposer } from "./task-composer.js";
 import { notify } from "./feedback.js";
 import { captureView, restoreView, createRunList, updateMarkup } from "./live-view.js";
 import { createEventViewer } from "./event-viewer.js";
+import { setupOnboarding } from './onboarding.js';
 import { setupEnvironment } from "./environment.js";
 import { agentOutput } from "./run-output.js";
 import { notificationForTransition } from "./notifications.js";
@@ -12,6 +13,8 @@ const dialog = document.querySelector("#task-dialog");
 const runDialog = document.querySelector("#run-dialog");
 let currentRuns = [];
 let runnerConnected = false;
+let loginBusy = false;
+let onboarding;
 let visibleLimit = 20;
 let detailTab = "overview";
 const detailTabViews = new Map();
@@ -165,7 +168,7 @@ window.addEventListener("unhandledrejection", (event) => {
   showError(event.reason?.message || "Operation failed. Please try again.");
   event.preventDefault();
 });
-const environment = setupEnvironment({ request: checkedFetch, escapeHtml });
+const environment = setupEnvironment({ request: checkedFetch, escapeHtml, onReport:report => onboarding?.environmentChanged(report) });
 document.querySelector("#dismiss-error").addEventListener("click", () => { document.querySelector("#operation-error").hidden = true; });
 const composer = setupTaskComposer({
   request: checkedFetch, escapeHtml, notify,
@@ -180,6 +183,19 @@ const composer = setupTaskComposer({
   },
 });
 const pendingActions = new Map();
+onboarding = setupOnboarding({
+  request:checkedFetch, notify,
+  onEnvironment:() => navigate('environment-panel'),
+  onProject:() => { const form = document.querySelector('#project-form'); form.hidden = false; navigate('catalog-panel'); form.elements.name.focus(); },
+  onTask:() => composer.open(),
+  onSignedIn:() => { void environment.refresh(); },
+  onBusyChange:(busy) => {
+    loginBusy = busy;
+    composer.connectionChanged(runnerConnected && !loginBusy);
+    document.querySelector('#new-task').disabled = !runnerConnected || loginBusy;
+    updatePendingButtons();
+  },
+});
 function acceptRun(incoming) {
   const current = currentRuns.find((run) => run.id === incoming.id);
   // The SSE stream may already have delivered a later state than the HTTP reply.
@@ -213,7 +229,7 @@ function updatePendingButtons() {
     const operation = getRunAction(button);
     if (!operation) return;
     const run = currentRuns.find((item) => item.id === button.dataset.id);
-    button.disabled = !runnerConnected || pendingActions.has(button.dataset.id) || Boolean(run?.starting && operation !== "cancel");
+    button.disabled = !runnerConnected || pendingActions.has(button.dataset.id) || Boolean(run?.starting && operation !== "cancel") || (loginBusy && ['approve', 'retry'].includes(operation));
     const busy = pendingActions.get(button.dataset.id) === operation;
     button.dataset.label ||= button.textContent;
     button.textContent = busy ? "Working…" : button.dataset.label;
@@ -434,6 +450,7 @@ function renderCatalog() {
   document.querySelector("#project-filter").innerHTML = '<option value="">All projects</option>' + projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("");
   document.querySelector("#project-filter").value = projects.some((project) => project.id === selectedProjectFilter) ? selectedProjectFilter : '';
   composer.catalogChanged(projects, templates);
+  onboarding.projectsChanged(projects);
   document.querySelectorAll(".delete-project").forEach((button) => button.addEventListener("click", async () => {
     await checkedFetch(`/api/projects/${button.dataset.id}`, { method: "DELETE" });
     await loadCatalog();
@@ -598,13 +615,14 @@ window.addEventListener("appinstalled", () => {
 
 function connectionStatus(connected) {
   runnerConnected = connected;
-  composer.connectionChanged(connected);
+  composer.connectionChanged(connected && !loginBusy);
+  onboarding.connectionChanged(connected);
   updatePendingButtons();
   const status = document.querySelector(".local-status");
   status.classList.toggle("disconnected", !connected);
   status.querySelector("small").textContent = connected ? "Connected" : "Reconnecting…";
   document.querySelector("#connection-banner").hidden = connected;
-  document.querySelector("#new-task").disabled = !connected;
+  document.querySelector("#new-task").disabled = !connected || loginBusy;
 }
 
 function showUpdate(registration) {
@@ -630,6 +648,7 @@ connectionStatus(false);
 syncNavigation();
 renderNotifications();
 const events = new EventSource("/api/events");
+events.addEventListener('auth', event => onboarding.accept(JSON.parse(event.data)));
 events.onopen = () => {
   connectionStatus(true);
   void Promise.all([loadSettings(), loadCatalog(), environment.refresh()]).catch(() => {});

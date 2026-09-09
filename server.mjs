@@ -12,6 +12,8 @@ import { saveJson, loadJson } from "./lib/storage.mjs";
 import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
 import { createRunPublisher } from "./lib/live-events.mjs";
 import { startupErrorMessage } from "./lib/startup.mjs";
+import { createAuthManager } from "./lib/auth.mjs";
+import { applicationId } from "./lib/launcher.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -38,6 +40,14 @@ let stopping = false;
 let customTemplates = [];
 const defaultSettings = { maxConcurrentRuns: 2, maxTokensPerRun: 200000, maxTokensPerRepository: 1000000 };
 let settings = { ...defaultSettings };
+const auth = createAuthManager({
+  getExecutable: () => resolveTool('codex', runtimeSettings, runnerEnv),
+  env: runnerEnv,
+  onChange: (state) => {
+    diagnosticsPromise = null;
+    if (!stopping) for (const client of eventClients) client.write(`event: auth\ndata: ${JSON.stringify(state)}\n\n`);
+  },
+});
 
 async function initialize() {
   await mkdir(dataDir, { recursive: true });
@@ -380,6 +390,15 @@ async function retry(run) {
 }
 
 async function api(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/auth/status') return send(res, 200, auth.snapshot());
+  if (req.method === 'POST' && url.pathname === '/api/auth/refresh') return send(res, 200, await auth.refresh());
+  if (req.method === 'POST' && url.pathname === '/api/auth/login') {
+    if (processes.size || [...runs.values()].some(run => run.starting || ['queued', 'running', 'approved'].includes(run.state))) {
+      return send(res, 409, {error:'Finish or cancel running and queued tasks before starting login.'});
+    }
+    return send(res, 202, auth.start());
+  }
+  if (req.method === 'POST' && url.pathname === '/api/auth/cancel') return send(res, 200, await auth.cancel());
   if (req.method === "GET" && url.pathname === "/api/diagnostics") {
     if (!diagnosticsPromise) {
       const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion })
@@ -405,7 +424,7 @@ async function api(req, res, url) {
     return send(res, 200, next);
   }
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return send(res, 200, { ready, version: appVersion, activeRuns: processes.size });
+    return send(res, 200, { app:applicationId, ready:ready && !stopping, version: appVersion, activeRuns: processes.size });
   }
   if (req.method === "GET" && url.pathname === "/api/events") {
     res.writeHead(200, {
@@ -416,6 +435,7 @@ async function api(req, res, url) {
     res.write("retry: 1500\n\n");
     eventClients.add(res);
     res.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
+    res.write(`event: auth\ndata: ${JSON.stringify(auth.snapshot())}\n\n`);
     const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15000);
     req.on("close", () => { clearInterval(heartbeat); eventClients.delete(res); });
     return;
@@ -575,11 +595,14 @@ export const controlServer = createServer(async (req, res) => {
     }
     const url = new URL(req.url, origin);
     if (url.pathname.startsWith("/api/")) {
-      if (!ready || stopping) return send(res, 503, { error: "Runner is starting or stopping" });
+      if ((!ready || stopping) && url.pathname !== '/api/health') return send(res, 503, { error: "Runner is starting or stopping" });
       const id = url.pathname.match(/^\/api\/runs\/([^/]+)/)?.[1];
       const run = runs.get(id);
       const mutating = !["GET", "HEAD"].includes(req.method);
       const key = mutating ? (run ? `repo:${run.repository}` : url.pathname) : null;
+      const needsCredentials = url.pathname === '/api/runs' || url.pathname === '/api/runtime' || /\/(approve|retry)$/.test(url.pathname);
+      if (mutating && needsCredentials && auth.isLoggingIn()) return send(res, 409, {error:'Finish or cancel Codex login before changing runtime settings or starting a task.'});
+      if (key && ((key === '/api/auth/login' && actionLocks.size) || (actionLocks.has('/api/auth/login') && !url.pathname.startsWith('/api/auth/')))) return send(res, 409, {error:'Another operation is in progress; try again shortly.'});
       if (key && (actionLocks.has(key) || (actionLocks.has("/api/runtime") && url.pathname !== "/api/runtime") || (url.pathname === "/api/runtime" && actionLocks.size))) return send(res, 409, { error: "Another operation is in progress; try again shortly" });
       if (key) actionLocks.add(key);
       let handled;
@@ -623,6 +646,7 @@ export function shutdown() {
   stopping = true;
   shutdownPromise = (async () => {
     controlServer.close();
+    await auth.shutdown();
     for (const client of eventClients) client.end();
     controlServer.closeIdleConnections();
     for (const run of runs.values()) {

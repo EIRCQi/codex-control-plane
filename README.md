@@ -2,7 +2,21 @@
 
 A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
 
-## Latest update: v0.3.1 — read live events at your own pace
+## Latest update: v0.4.0 — open the dashboard and connect Codex
+
+Run `npm run open`, or double-click **Start-Control-Plane.command** on macOS. The launcher opens the browser and reuses a recognized local Runner if one is already listening. Otherwise it starts a Runner in the current terminal; keep that terminal open and use Ctrl+C to stop it and its tasks. Browser mode needs no `npm install` or Electron download.
+
+The **Quick start** panel guides you through local tools, **Sign in with ChatGPT**, and registering a project or creating a task. Sign-in opens the official Codex browser flow, reports progress live, and checks `codex login status` before showing success. If the browser did not open, a validated **Open sign-in page** link appears when the CLI supplies one. **Check login** also recognizes a login completed separately in your terminal.
+
+Existing CLI credentials are reused. Login can be cancelled and times out after three minutes; stopping waits for the login process to exit, escalating after three seconds if needed. Finish or cancel running/queued tasks before starting login. New task starts, approvals, retries and executable-path changes wait until login finishes or is cancelled. Cancelling never logs you out or removes credentials already saved by Codex.
+
+Codex owns authentication and credential storage. Browser authorization completes with OpenAI; the control plane keeps only sanitized progress and the browser authorization request URL in memory, without saving raw CLI login output to its data files. Codex caches credentials for subsequent sessions, so signing in is usually a first-use action. Local credential availability does not verify online access or remaining quota. See [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth).
+
+**Upgrade from v0.3.1 or earlier:** quit the old Runner once, then run `git pull --ff-only` and `npm run open`. Older health responses cannot identify the application, so the new launcher refuses to reuse that listener. It never stops an unrelated process. Future opens can reuse this version's Runner. No new dependencies or data migration are required.
+
+The 69 local Node tests pass, including simulated-CLI HTTP login, duplicate/cancel/timeout handling, credential-output redaction, service reuse and reconnect state. JavaScript syntax, HTML structure and shell assets were checked. Tests do not exercise real account authorization, native macOS/Electron behavior or browser layout; those need verification on the user's machine. This source update does not publish native installers.
+
+## v0.3.1 — read live events at your own pace
 
 The **Events** tab now has message/type search, **Pause display**, **Resume display** and **Jump to latest** controls. Pausing freezes the displayed snapshot while the task continues running; the interface reports how many newer events remain available in the latest 500-event buffer. Search stays active as events arrive. Scrolling back stops automatic following; **Jump to latest** resumes it. The workflow timeline is expandable above the log viewer.
 
@@ -110,7 +124,9 @@ Browsers with PWA support can install the local dashboard into a standalone appl
 
 ## Desktop runner and system tray
 
-Install development dependencies once with `npm install`, then start the native desktop shell with `npm run desktop`. Electron starts the same local control server, opens an isolated renderer window and adds a system tray menu. Closing the window hides it while the Runner and active Codex tasks continue; use **Quit** in the tray menu to stop the application. The tray can also reopen the window or launch the dashboard in the default browser.
+Install development dependencies once with `npm install`, then start the native desktop shell with `npm run desktop`. Electron starts the local control server or attaches to a recognized Runner already using the configured port, opens an isolated renderer window and adds a system tray menu. Closing the window hides it while the Runner and active Codex tasks continue. The tray can reopen the window or launch the dashboard in the default browser.
+
+When Electron starts its own Runner, **Quit** stops that Runner and its tasks. When it attaches to an existing Runner, the menu shows **Quit window (keep Runner)**: quitting closes only the desktop shell. It displays the existing Runner's projects and history from that Runner's data directory, instead of loading a separate desktop data set. Reopening an already running desktop app brings its existing window forward.
 
 ## Desktop installers
 
@@ -123,18 +139,18 @@ Tag builds additionally verify that the tag matches `package.json`, generate SHA
 ## Requirements
 
 - Node.js 20+
-- Codex CLI installed and authenticated
+- Codex CLI installed; authenticate through Quick start or `codex login`
 - A local Git repository to operate on
 
 ## Run locally
 
 ```bash
-npm start
+npm run open
 ```
 
-Open <http://127.0.0.1:4310>.
+The launcher opens <http://127.0.0.1:4310>. On macOS you can also double-click **Start-Control-Plane.command** in the repository. `npm start` remains available to start only the server without opening a browser or attaching to an existing instance.
 
-If port `4310` is already occupied, the desktop app or another local Runner may already be active. Open the URL first, inspect the listener with `lsof -nP -iTCP:4310 -sTCP:LISTEN`, or start an independent instance with `PORT=4311 npm start`.
+If port `4310` is occupied by an older Runner, quit it once before upgrading. For another application, inspect the listener with `lsof -nP -iTCP:4310 -sTCP:LISTEN` or use `PORT=4311 npm run open`. Use a separate `CODEX_CONTROL_PLANE_DATA_DIR` if you intentionally run multiple Runners; a different port alone does not isolate saved data.
 
 Run the runtime, state-machine and simulated-Codex integration tests with:
 
