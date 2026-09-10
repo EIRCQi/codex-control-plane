@@ -39,6 +39,7 @@ const messages = new Map([
   ['NetworkError when attempting to fetch resource.', '网络请求失败，请确认本地服务仍在运行。'],
   ['Request body too large', '任务请求内容过大，请缩短后重试。'],
   ['Repository must be an absolute path', '请填写本机 Git 仓库文件夹的绝对路径，可在项目目录运行 pwd 查看。'],
+  ['Repository needs an initial Git commit before starting a task', '这个仓库还没有 Git 提交，请先完成首次提交，再创建任务。'],
   ['Repository must be clean before starting an isolated run', '仓库存在未提交的修改，请先提交或妥善保存这些修改，再创建任务。'],
   ['This older run has no valid repository baseline; discard it and create a new run', '旧任务缺少有效的仓库基线，请丢弃它并新建任务。'],
   ['Original repository HEAD or branch changed; create a new run', '原仓库的提交或分支已改变，请新建任务重新分析。'],

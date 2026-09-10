@@ -38,7 +38,15 @@ const fs = require('node:fs');
 const args = process.argv;
 if (args.includes('--version')) { console.log('codex-cli 1.2.3'); process.exit(0); }
 if (args.includes('login')) { console.log('credential-marker-private'); process.exit(0); }
-if (args.at(-1).includes('slow')) {
+if (args.at(-1).includes('gated quota')) {
+  console.log(JSON.stringify({type:'output', message:'ready'}));
+  const timer=setInterval(() => {
+    if (fs.existsSync(${JSON.stringify(path.join(dir,'release-quota'))})) {
+      clearInterval(timer);
+      console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));
+    }
+  }, 20);
+} else if (args.at(-1).includes('slow')) {
   process.on('SIGTERM', () => {});
   console.log(JSON.stringify({type:'output', message:'ready'}));
   setInterval(() => {}, 1000);
@@ -65,6 +73,32 @@ if (args.at(-1).includes('slow')) {
   const state = (id, target) => until(async () => { const r = await run(id); return r.state === target && !r.starting && r; });
   const start = async (prompt, extra = {}) => { const r = await request('/api/runs', 'POST', {repository:repo, prompt, ...extra}); assert.equal(r.status, 202); return r.json(); };
   const action = (id, op) => request(`/api/runs/${id}/${op}`, 'POST');
+
+  // Invalid or failed settings writes cannot change the live policy.
+  const initialSettings = await request('/api/settings').then(r=>r.json());
+  assert.equal((await request('/api/settings', 'PUT', {...initialSettings,maxTokensPerRun:null})).status,400);
+  assert.deepEqual(await request('/api/settings').then(r=>r.json()),initialSettings);
+  const eventsAbort=new AbortController();
+  t.after(()=>eventsAbort.abort());
+  const eventResponse=await fetch(url+'/api/events',{signal:eventsAbort.signal});
+  let streamed='';
+  const eventRead=(async()=>{for await(const chunk of eventResponse.body) streamed+=Buffer.from(chunk).toString();})().catch(error=>{if(error.name!=='AbortError')throw error;});
+  try {
+    assert.equal((await request('/api/settings', 'PUT', initialSettings)).status,200);
+    assert.equal((await request('/api/projects','POST',{name:'Test project',repository:repo})).status,201);
+    await until(()=>streamed.includes('event: settings\n') && streamed.includes('event: catalog\n'));
+    assert.match(streamed,/Test project/);
+  } finally { eventsAbort.abort();await eventRead; }
+  const settingsPath=path.join(data,'settings.json');
+  await rename(settingsPath,settingsPath+'.saved');await mkdir(settingsPath);
+  try {
+    assert.equal((await request('/api/settings','PUT',{...initialSettings,maxConcurrentRuns:8})).status,400);
+    assert.deepEqual(await request('/api/settings').then(r=>r.json()),initialSettings);
+  } finally { await rm(settingsPath,{recursive:true,force:true});await rename(settingsPath+'.saved',settingsPath); }
+
+  const emptyRepo=path.join(dir,'empty');await mkdir(emptyRepo);execFileSync('git',['init','-q'],{cwd:emptyRepo});
+  const emptyResult=await request('/api/runs','POST',{repository:emptyRepo,prompt:'No commit yet'});
+  assert.equal(emptyResult.status,400);assert.match((await emptyResult.json()).error,/initial Git commit/);
 
   const foreign = await fetch(url+'/api/runs', {method:'POST',headers:{'content-type':'application/json',origin:'https://example.invalid'},body:JSON.stringify({repository:repo,prompt:'Foreign request'})});
   assert.equal(foreign.status, 403);
@@ -94,6 +128,8 @@ if (args.at(-1).includes('slow')) {
 
   const review = await start('Review repository', {mode:'implement', templateId:'builtin-review'});
   const reviewed = await state(review.id, 'completed');
+  assert.equal(reviewed.task,'Review repository');
+  assert.match(reviewed.templatePrompt,/\{\{task\}\}/);
   assert.equal(reviewed.mode, 'review'); assert.equal(reviewed.worktree, null);
   assert.ok(reviewed.events.every((event) => !/approval|approved|merge/.test(event.type)));
   assert.match(reviewed.output, /Review report/);
@@ -110,6 +146,11 @@ if (args.at(-1).includes('slow')) {
   await action(first.id, 'retry');
   await state(first.id, 'awaiting_approval');
   assert.equal(await readFile(path.join(repo, 'README.md'), 'utf8'), 'baseline\n');
+  const beforeApproval=await run(first.id);
+  await request('/api/settings','PUT',{...initialSettings,maxTokensPerRun:beforeApproval.usage.totalTokens});
+  assert.equal((await action(first.id,'approve')).status,400);
+  assert.equal((await run(first.id)).state,'awaiting_approval');
+  await request('/api/settings','PUT',initialSettings);
   await action(first.id, 'approve');
   await state(first.id, 'awaiting_merge');
   const results = await Promise.all([action(first.id, 'apply'), action(first.id, 'apply')]);
@@ -136,7 +177,10 @@ if (args.at(-1).includes('slow')) {
   // Budget termination has the same escalation path as user cancellation.
   await request('/api/settings', 'PUT', {maxConcurrentRuns:2, maxTokensPerRun:1, maxTokensPerRepository:0});
   const budget = await start('Small budget');
-  await state(budget.id, 'budget_exceeded');
+  const stoppedBudget=await state(budget.id, 'budget_exceeded');
+  assert.equal((await action(budget.id,'retry')).status,400);
+  assert.equal((await run(budget.id)).executionSeq,stoppedBudget.executionSeq);
+  assert.equal((await run(budget.id)).retries,stoppedBudget.retries);
   await request('/api/settings', 'PUT', {maxConcurrentRuns:2, maxTokensPerRun:0, maxTokensPerRepository:0});
   // Read-only mode survives retries after budget stops.
   await request('/api/settings', 'PUT', {maxConcurrentRuns:2, maxTokensPerRun:1, maxTokensPerRepository:0});
@@ -148,6 +192,27 @@ if (args.at(-1).includes('slow')) {
   assert.equal(retriedReview.mode, 'review'); assert.equal(retriedReview.phase, 'analysis');
   assert.ok(retriedReview.events.every((event) => event.type !== 'run.approved'));
   assert.equal(git('status', '--porcelain'), '');
+
+  // A saved lower quota stops active tasks and prevents queued worktrees/CLI calls.
+  await request('/api/settings','PUT',{maxConcurrentRuns:1,maxTokensPerRun:0,maxTokensPerRepository:0});
+  const quotaActive=await start('slow quota check');
+  await until(async()=>(await run(quotaActive.id)).logs?.some(log=>log.message==='ready'));
+  const queued=await start('queued quota check');
+  assert.equal((await run(queued.id)).executionSeq,0);
+  const used=(await request('/api/usage').then(r=>r.json())).totalTokens;
+  await request('/api/settings','PUT',{maxConcurrentRuns:1,maxTokensPerRun:0,maxTokensPerRepository:used});
+  const blocked=await state(queued.id,'budget_exceeded');
+  assert.equal(blocked.executionSeq,0);assert.equal(blocked.worktree,null);
+  await state(quotaActive.id,'budget_exceeded');
+  await request('/api/settings','PUT',{maxConcurrentRuns:1,maxTokensPerRun:0,maxTokensPerRepository:used+15});
+  const gated=await start('gated quota');
+  await until(async()=>(await run(gated.id)).logs?.some(log=>log.message==='ready'));
+  const behind=await start('wait for quota gate');
+  await writeFile(path.join(dir,'release-quota'),'ready');
+  await state(gated.id,'budget_exceeded');
+  const depleted=await state(behind.id,'budget_exceeded');
+  assert.equal(depleted.executionSeq,0);assert.equal(depleted.worktree,null);
+  await request('/api/settings','PUT',initialSettings);
 
   // An occupied-port launch must never restore or execute saved queued tasks.
   const occupiedData = path.join(dir, 'occupied'); await mkdir(occupiedData);

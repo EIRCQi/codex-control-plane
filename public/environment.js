@@ -6,7 +6,7 @@ export function setupEnvironment({ request, escapeHtml, onReport = () => {} }) {
   const refreshButton = document.querySelector('#refresh-environment');
   const status = document.querySelector('#environment-status');
   const controls = [...panel.querySelectorAll('button, input')];
-  let loaded = false;
+  let dirty = false;
   let pending = null;
 
   function render(report) {
@@ -29,42 +29,39 @@ export function setupEnvironment({ request, escapeHtml, onReport = () => {} }) {
     panel.setAttribute('aria-busy', String(value));
   }
 
-  async function refresh() {
-    if (pending) return pending;
-    busy(true);
-    status.textContent = '正在检查本地环境……';
-    pending = (async () => {
-      try {
-        if (!loaded) {
-          const settings = await request('/api/runtime').then((response) => response.json());
-          for (const key of ['gitPath', 'codexPath']) {
-            form.elements[key].value = settings[key];
-            form.elements[key].readOnly = settings.overrides[key];
-            document.querySelector(`#${key}-override`).hidden = !settings.overrides[key];
-          }
-          loaded = true;
-        }
-        render(await request('/api/diagnostics').then((response) => response.json()));
-        status.textContent = '';
-      } catch (error) { status.textContent = messageText(error.message); }
-      finally { busy(false); pending = null; }
-    })();
-    return pending;
+  async function readReport() {
+    if (!dirty) {
+      const settings = await request('/api/runtime').then(response => response.json());
+      for (const key of ['gitPath', 'codexPath']) {
+        form.elements[key].value = settings[key];
+        form.elements[key].readOnly = settings.overrides[key];
+        document.querySelector(`#${key}-override`).hidden = !settings.overrides[key];
+      }
+    }
+    render(await request('/api/diagnostics').then(response => response.json()));
   }
 
+  function perform(message, work) {
+    if (pending) return pending;
+    busy(true); status.textContent = message;
+    pending = Promise.resolve().then(work).then(() => {
+      status.textContent = dirty ? '检查已完成，程序路径的修改尚未保存。' : '';
+    }).catch(error => { status.textContent = messageText(error.message); })
+      .finally(() => { busy(false); pending = null; });
+    return pending;
+  }
+  const refresh = () => perform('正在检查本地环境……', readReport);
   refreshButton.addEventListener('click', () => { void refresh(); });
-  form.addEventListener('submit', async (event) => {
+  form.addEventListener('input', () => { dirty = true; status.textContent = '程序路径有未保存的修改'; });
+  form.addEventListener('submit', event => {
     event.preventDefault();
     if (pending) return;
     const body = { gitPath: form.elements.gitPath.value, codexPath: form.elements.codexPath.value };
-    busy(true);
-    status.textContent = '正在保存程序路径……';
-    try {
+    return perform('正在保存程序路径……', async () => {
       await request('/api/runtime', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      loaded = false;
-      await refresh();
-    } catch (error) { status.textContent = messageText(error.message); }
-    finally { busy(false); }
+      dirty = false;
+      await readReport();
+    });
   });
   return { refresh };
 }

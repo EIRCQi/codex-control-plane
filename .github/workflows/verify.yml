@@ -27,5 +27,8 @@ jobs:
       - run: node --check public/event-viewer.js
       - run: node --check public/onboarding.js
       - run: node --check public/locale.js
+      - run: node --check public/run-view.js
+      - run: node --check public/connection.js
+      - run: node --check public/environment.js
       - run: node --check scripts/launch.mjs
       - run: node --check scripts/status.mjs

@@ -1,4 +1,4 @@
-const focusSelector = 'button[data-id],button[data-copy],[data-tab-panel]';
+const focusSelector = 'button[data-id],button[data-copy],button[data-download],[data-tab-panel]';
 const markupCache = new WeakMap();
 
 export function updateMarkup(node, markup) {
@@ -13,7 +13,7 @@ export function captureView(root) {
     top: root.scrollTop, left: root.scrollLeft,
     focus: root.contains(active) && active.matches(focusSelector) ? {
       id: active.dataset.id, action: active.dataset.action, runAction: active.dataset.runAction,
-      copy: active.dataset.copy, panel: active.dataset.tabPanel, className: active.className,
+      copy: active.dataset.copy, download: active.dataset.download, panel: active.dataset.tabPanel, className: active.className,
     } : null,
     sections: new Map([...root.querySelectorAll('[data-view]')].filter((node) => node.getClientRects().length).map((node) => [node.dataset.view, {
       open: node.tagName === 'DETAILS' ? node.open : undefined,
@@ -33,8 +33,8 @@ export function restoreView(root, state) {
     node.scrollLeft = previous.left;
   }
   if (state.focus) {
-    const {id, action, runAction, copy, panel, className} = state.focus;
-    [...root.querySelectorAll(focusSelector)].find((node) => node.dataset.id === id && node.dataset.action === action && node.dataset.runAction === runAction && node.dataset.copy === copy && node.dataset.tabPanel === panel && node.className === className)?.focus({preventScroll:true});
+    const {id, action, runAction, copy, download, panel, className} = state.focus;
+    [...root.querySelectorAll(focusSelector)].find((node) => node.dataset.id === id && node.dataset.action === action && node.dataset.runAction === runAction && node.dataset.copy === copy && node.dataset.download === download && node.dataset.tabPanel === panel && node.className === className)?.focus({preventScroll:true});
   }
 }
 
@@ -49,14 +49,20 @@ export function createRunList(container, renderCard) {
     runs.forEach((run, index) => {
       let entry = cards.get(run.id);
       if (!entry || entry.run !== run) {
+        const markup = renderCard(run);
+        if (entry?.markup === markup) {
+          entry.run = run;
+          if (container.children[index] !== entry.node) container.insertBefore(entry.node, container.children[index] || null);
+          return;
+        }
         const template = container.ownerDocument.createElement('template');
-        template.innerHTML = renderCard(run);
+        template.innerHTML = markup;
         const node = template.content.firstElementChild;
         const previous = entry && captureView(entry.node);
         if (entry) entry.node.replaceWith(node);
         else container.insertBefore(node, container.children[index] || null);
         if (previous) restoreView(node, previous);
-        entry = {run, node};
+        entry = {run, node, markup};
         cards.set(run.id, entry);
       }
       if (container.children[index] !== entry.node) container.insertBefore(entry.node, container.children[index] || null);

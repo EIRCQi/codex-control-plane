@@ -13,7 +13,7 @@ export function previewTask(template, task) {
   return template ? template.prompt.replaceAll('{{task}}', task.trim() || '{{task}}') : task.trim();
 }
 
-export function setupTaskComposer({request, onCreated, onNeedProject, escapeHtml, notify}) {
+export function setupTaskComposer({request, onCreated, onNeedProject, escapeHtml, notify, confirmReplace = () => window.confirm('这将替换当前任务草稿，是否继续？')}) {
   const dialog = document.querySelector('#task-dialog');
   const form = document.querySelector('#task-form');
   const fields = form.querySelector('fieldset');
@@ -92,11 +92,20 @@ export function setupTaskComposer({request, onCreated, onNeedProject, escapeHtml
   dialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault(); });
   document.querySelectorAll('#close-dialog,#cancel-dialog').forEach((button) => button.addEventListener('click', () => { if (!busy) dialog.close(); }));
   return {
-    open() {
+    open(preset) {
+      if (busy) return false;
       if (!connected) { notify('请先恢复与本地执行器的连接，再新建任务', {kind:'error'}); return; }
       if (!projects.length) { onNeedProject(); return; }
+      if (preset) {
+        const next = normalizeDraft({...values(), ...preset});
+        if (form.elements.prompt.value.trim() && JSON.stringify(next) !== JSON.stringify(values()) && !confirmReplace()) return false;
+        preferredMode = next.mode;
+        for (const key of ['projectId', 'templateId', 'prompt']) form.elements[key].value = next[key];
+        error.textContent = ''; remember(); sync();
+      }
       if (!dialog.open) dialog.showModal();
       (form.elements.projectId.value ? form.elements.prompt : form.elements.projectId).focus();
+      return true;
     },
     catalogChanged,
     connectionChanged(value) { connected = value; sync(); },

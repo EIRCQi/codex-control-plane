@@ -5,7 +5,7 @@ import {builtInTemplates, renderTemplate} from '../lib/catalog.mjs';
 
 // Exercise actual composer event handlers with a small form adapter. Rendering,
 // native focus and CSS require a real browser; this adapter does not claim them.
-function harness(t, {stored, request = async () => ({json:async () => ({id:'created'})})} = {}) {
+function harness(t, {stored, confirmReplace, request = async () => ({json:async () => ({id:'created'})})} = {}) {
   class Control {
     value=''; disabled=false; hidden=false; textContent=''; open=false; listeners=new Map();
     addEventListener(type,handler) { const handlers=this.listeners.get(type)||[];handlers.push(handler);this.listeners.set(type,handlers); }
@@ -29,7 +29,7 @@ function harness(t, {stored, request = async () => ({json:async () => ({id:'crea
   global.localStorage={getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
   t.after(()=>{global.document=previous.document;global.localStorage=previous.localStorage;});
   const created=[],messages=[];
-  const composer=setupTaskComposer({request,onCreated:async run=>created.push(run),notify:message=>messages.push(message),escapeHtml:s=>s,onNeedProject:()=>messages.push('needs project')});
+  const composer=setupTaskComposer({request,confirmReplace,onCreated:async run=>created.push(run),notify:message=>messages.push(message),escapeHtml:s=>s,onNeedProject:()=>messages.push('needs project')});
   composer.connectionChanged(true);
   const projects=[{id:'project-a',name:'A',branch:'main'},{id:'project-b',name:'B',branch:'main'}];
   composer.catalogChanged(projects,builtInTemplates);
@@ -87,4 +87,15 @@ test('success submits the effective review mode and clears the draft only after 
   assert.equal(h.storage.has('codex-control-plane.task-draft.v1'),false);
   assert.equal(h.get('#task-dialog').open,false);assert.deepEqual(h.created,[{id:'accepted'}]);
   h.composer.connectionChanged(false);assert.equal(h.get('#start-task').disabled,true);
+});
+
+test('reuse asks before replacing an existing draft, and never submits a task automatically', async t => {
+  let allow=false,requests=0;
+  const h=harness(t,{stored:{projectId:'project-a',prompt:'Keep my draft'},confirmReplace:()=>allow,request:async()=>{requests++;}});
+  const preset={projectId:'project-b',templateId:'builtin-review',prompt:'Review reused task',mode:'review'};
+  assert.equal(h.composer.open(preset),false);assert.equal(h.form.elements.prompt.value,'Keep my draft');
+  allow=true;assert.equal(h.composer.open(preset),true);
+  assert.equal(h.form.elements.projectId.value,'project-b');assert.equal(h.form.elements.mode.value,'review');
+  assert.equal(h.form.elements.prompt.value,'Review reused task');assert.equal(requests,0);
+  assert.equal(JSON.parse(h.storage.get('codex-control-plane.task-draft.v1')).prompt,'Review reused task');
 });

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — 2026-09-10
+
+- Replaced expanded run cards with summaries and direct links to the relevant approval/progress tab. Full prompts, reports, events and patches remain in details. Unchanged summary markup retains DOM nodes; log-only updates skip usage-table rendering, and usage rows load in batches of 30 without changing totals.
+- Added project-name/ID and multi-term search, four sort orders, saved browser filters, project task shortcuts, terminal-run reuse, and Markdown/patch downloads. New runs retain the original task and template snapshot; legacy or changed templates reuse their expanded prompt without applying a second template. Reusing a task never starts it automatically and asks before replacing an existing draft.
+- Added an SSE heartbeat watchdog, manual reconnect and page-cache restore handling. Old connections cannot overwrite a newer stream. Project and budget changes broadcast to other open tabs; stale catalog/settings responses are ignored and edited forms are preserved. Environment checks and path saves share one operation guard.
+- Validate budgets before approvals, retries, dequeue and CLI launch, including a fully consumed limit. Saving lower limits checks queued/active work immediately. A failed settings write no longer changes live policy; empty/boolean/unsafe numeric limits are rejected. Empty Git repositories receive an initial-commit explanation before a task is created.
+- Added regression coverage for reuse and draft protection, filtering/export preservation, unchanged DOM nodes, heartbeat recovery, concurrent environment operations, budget enforcement and failed-save rollback. Extended real HTTP/Git tests to verify streamed settings/catalog updates and that exhausted queued runs create neither worktrees nor CLI processes.
+
+All 86 local Node tests pass, along with script syntax, HTML structure, literal DOM selectors and module/cache asset checks. No dependency changes, data migration or installer publication. Existing two-stage write/change approvals remain in force. Budget enforcement uses reported events and does not guarantee an exact token ceiling while a Codex turn is still running. Browser layout and native Mac interactions remain outside this environment's validation.
+
 ## 0.5.0 — 2026-09-10
 
 - Localized the main interface, onboarding, task forms/details, approvals, notifications, project/template management, usage, environment checks and desktop tray labels to Simplified Chinese. Added `zh-CN` document/manifest metadata, local date/number formatting and Chinese font fallbacks.

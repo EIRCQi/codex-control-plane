@@ -47,7 +47,7 @@
           </div>
         </div>
       </header>
-      <p id="connection-banner" class="connection-banner" role="status">正在连接本地执行器……若服务已停止，请运行 npm run open，并保持终端打开。</p>
+      <div id="connection-banner" class="connection-banner" role="status"><span>正在连接本地执行器……若服务已停止，请运行 <code>npm run open</code>，并保持终端打开。</span><button type="button" class="secondary" id="reconnect-runner">立即重连</button></div>
       <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="关闭错误提示">×</button></div>
       <section id="setup-panel" class="setup-panel" aria-labelledby="setup-title">
         <div class="setup-heading"><div><p class="eyebrow">快速开始</p><h2 id="setup-title">开始使用 Codex</h2></div><span id="login-status" class="setup-status" role="status">尚未检查登录</span></div>
@@ -76,15 +76,16 @@
         <article><span>权限模式</span><strong class="safe">审批保护</strong><small>等待审批</small></article>
       </section>
       <section class="panel" id="runs-panel" tabindex="-1">
-        <div class="panel-title"><div><p class="eyebrow">执行队列</p><h2>任务列表</h2></div><span class="live"><i></i> 实时更新</span></div>
+        <div class="panel-title"><div><p class="eyebrow">执行队列</p><h2>任务列表</h2></div><span class="live"><i></i><span id="live-status">正在连接</span></span></div>
         <div class="quick-filters" role="group" aria-label="任务快捷筛选">
           <button type="button" class="filter-chip" data-quick-filter="" aria-pressed="true">全部状态</button><button type="button" class="filter-chip" data-quick-filter="active" aria-pressed="false">执行中</button><button type="button" class="filter-chip" data-quick-filter="approvals" aria-pressed="false">待审批</button><button type="button" class="filter-chip" data-quick-filter="failed" aria-pressed="false">失败</button>
           <button type="button" class="text-button" id="clear-filters" hidden>清除筛选</button>
         </div>
         <div class="run-filters">
-          <input id="run-search" type="search" aria-label="搜索任务" aria-keyshortcuts="/" placeholder="搜索任务内容或仓库路径……" />
+          <input id="run-search" type="search" aria-label="搜索任务" aria-keyshortcuts="/" placeholder="搜索任务、项目名称、仓库或任务 ID……" />
           <select id="state-filter" aria-label="任务状态"><option value="">全部状态</option><option value="active">执行中</option><option value="approvals">全部待审批</option><option value="awaiting_approval">写入审批</option><option value="awaiting_merge">变更审批</option><option value="completed">已完成</option><option value="failed">失败</option><option value="discarded">已丢弃</option><option value="cancelled">已取消</option><option value="budget_exceeded">预算超限</option></select>
           <select id="project-filter" aria-label="按项目筛选"><option value="">全部项目</option></select>
+          <select id="sort-runs" aria-label="任务排序"><option value="created">最新创建</option><option value="updated">最近更新</option><option value="attention">待处理优先</option><option value="tokens">Token 从高到低</option></select>
           <label class="archive-toggle"><input id="show-archived" type="checkbox" /> 显示已归档任务</label>
           <span id="filter-count" role="status"></span>
         </div>
@@ -131,14 +132,15 @@
           <div class="model-usage"><h3>按模型统计</h3><div id="model-list" class="model-list"><p>暂无模型用量数据</p></div></div>
         </div>
         <div class="usage-table-wrap"><table><thead><tr><th>任务</th><th>模型</th><th>输入</th><th>缓存</th><th>输出</th><th>合计</th><th>运行时长</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
+        <div class="usage-pagination"><span id="usage-count"></span><button class="secondary" type="button" id="usage-more" hidden>再显示 30 条</button></div>
         <p class="cost-note">这里只统计实际 Token；通过 ChatGPT 登录的 Codex 用量无法直接按 API 单价换算费用。</p>
         <form class="budget-settings" id="budget-settings">
-          <div><p class="eyebrow">用量控制</p><h3>预算与并发</h3><p>Token 预算填 0 表示不限制。</p></div>
+          <div><p class="eyebrow">用量控制</p><h3>预算与并发</h3><p>0 表示不限制。重试累计用量；保存新上限会检查排队及执行中的任务。</p></div>
           <label>最大并发数<input name="maxConcurrentRuns" type="number" min="1" max="8" required /></label>
-          <label>单任务 Token 上限<input name="maxTokensPerRun" type="number" min="0" step="1000" required /></label>
-          <label>单仓库累计 Token 配额<input name="maxTokensPerRepository" type="number" min="0" step="1000" required /></label>
+          <label>单任务 Token 上限<input name="maxTokensPerRun" type="number" min="0" step="1" max="9007199254740991" required /></label>
+          <label>单仓库累计 Token 配额<input name="maxTokensPerRepository" type="number" min="0" step="1" max="9007199254740991" required /></label>
           <button class="primary">保存设置</button>
-          <span id="settings-status"></span>
+          <span id="settings-status" role="status"></span>
         </form>
       </section>
       <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
@@ -186,7 +188,7 @@
         <div id="run-detail">
           <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0"><div id="detail-overview-body"></div></section>
           <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
-            <div class="content-toolbar"><h3 id="detail-output-title">执行结果</h3><button type="button" class="secondary" data-copy="output" disabled>复制结果</button></div>
+            <div class="content-toolbar"><h3 id="detail-output-title">执行结果</h3><div class="content-actions"><button type="button" class="secondary" data-copy="output" disabled>复制结果</button><button type="button" class="secondary" data-download="output" disabled>下载报告</button></div></div>
             <div id="detail-output-body"></div>
           </section>
           <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
@@ -200,7 +202,7 @@
             </div>
           </section>
           <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0" hidden>
-            <div class="content-toolbar"><h3>待审批的代码变更</h3><button type="button" class="secondary" data-copy="diff" disabled>复制补丁</button></div>
+            <div class="content-toolbar"><h3>代码变更</h3><div class="content-actions"><button type="button" class="secondary" data-copy="diff" disabled>复制补丁</button><button type="button" class="secondary" data-download="diff" disabled>下载补丁</button></div></div>
             <div id="detail-diff-body"></div>
           </section>
         </div>

@@ -14,6 +14,7 @@ import { createRunPublisher } from "./lib/live-events.mjs";
 import { startupErrorMessage } from "./lib/startup.mjs";
 import { createAuthManager } from "./lib/auth.mjs";
 import { applicationId } from "./lib/launcher.mjs";
+import { defaultSettings, validateSettings, budgetReason } from './lib/budget.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -38,7 +39,6 @@ const jobs = new Set();
 let ready = false;
 let stopping = false;
 let customTemplates = [];
-const defaultSettings = { maxConcurrentRuns: 2, maxTokensPerRun: 200000, maxTokensPerRepository: 1000000 };
 let settings = { ...defaultSettings };
 const auth = createAuthManager({
   getExecutable: () => resolveTool('codex', runtimeSettings, runnerEnv),
@@ -52,7 +52,7 @@ const auth = createAuthManager({
 async function initialize() {
   await mkdir(dataDir, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
-  settings = { ...defaultSettings, ...await loadJson(settingsFile, {}, (v) => v && !Array.isArray(v) && typeof v === "object") };
+  settings = validateSettings({ ...defaultSettings, ...await loadJson(settingsFile, {}, (v) => v && !Array.isArray(v) && typeof v === "object") });
   for (const project of await loadJson(projectsFile, [], Array.isArray)) projects.set(project.id, project);
   customTemplates = await loadJson(templatesFile, [], Array.isArray);
   runtimeSettings = validateRuntimeSettings(await loadJson(runtimeFile, runtimeDefaults));
@@ -95,16 +95,20 @@ async function persist(run) {
   else for (const client of eventClients) client.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
 }
 
-async function persistSettings() {
-  await saveJson(settingsFile, settings);
+function broadcast(type, value) {
+  if (stopping) return;
+  const payload = `event: ${type}\ndata: ${JSON.stringify(value)}\n\n`;
+  for (const client of eventClients) client.write(payload);
 }
 
 async function persistProjects() {
   await saveJson(projectsFile, [...projects.values()]);
+  broadcast('catalog', { projects: [...projects.values()], templates: allTemplates() });
 }
 
 async function persistTemplates() {
   await saveJson(templatesFile, customTemplates);
+  broadcast('catalog', { projects: [...projects.values()], templates: allTemplates() });
 }
 
 const allTemplates = () => [...builtInTemplates, ...customTemplates];
@@ -140,6 +144,8 @@ async function inspectRepository(input) {
 
 async function validateRepository(input) {
   const { resolved } = await inspectRepository(input);
+  try { await git(resolved, ['rev-parse', '--verify', 'HEAD']); }
+  catch { throw new Error('Repository needs an initial Git commit before starting a task'); }
   const status = await git(resolved, ["status", "--porcelain"]);
   if (status.trim()) throw new Error("Repository must be clean before starting an isolated run");
   return resolved;
@@ -215,6 +221,7 @@ function stopChild(child) {
 async function executeCodex(run, sandbox, prompt) {
   const executable = await resolveTool("codex", runtimeSettings, runnerEnv);
   if (run.cancelRequested || stopping) throw new Error("Run cancelled");
+  if (enforceBudget(run)) throw new Error('Run cancelled');
   if (run.mode === "review" && sandbox !== "read-only") throw new Error("Read-only reviews cannot request write access");
   return new Promise((resolve, reject) => {
     const executionSeq = ++run.executionSeq;
@@ -235,21 +242,7 @@ async function executeCodex(run, sandbox, prompt) {
       let event;
       try { event = JSON.parse(line); } catch { event = { type: "output", message: line }; }
       const usageChanged = recordUsage(run, event, executionSeq);
-      if (usageChanged && !run.budgetExceeded) {
-        let message = null;
-        if (settings.maxTokensPerRun > 0 && run.usage.totalTokens > settings.maxTokensPerRun) {
-          message = `Run token budget exceeded (${run.usage.totalTokens.toLocaleString()} / ${settings.maxTokensPerRun.toLocaleString()})`;
-        } else {
-          const repoTokens = repositoryTokens(run.repository);
-          if (settings.maxTokensPerRepository > 0 && repoTokens > settings.maxTokensPerRepository) {
-            message = `Repository token quota exceeded (${repoTokens.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`;
-          }
-        }
-        if (message && ["queued", "running", "approved"].includes(run.state)) {
-          exceedBudget(run, message);
-          stopChild(child);
-        }
-      }
+      if (usageChanged) enforceBudget(run);
       const message = event.message || event.text || event.item?.text || event.item?.content || event.type || "Codex event";
       const display = typeof message === "string" ? message : JSON.stringify(message);
       run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
@@ -355,6 +348,10 @@ function drainQueue() {
       (candidate.state === "approved" && candidate.queuedAction === "implementation")
     ));
     if (!run) break;
+    if (enforceBudget(run)) {
+      void persist(run).catch(error => console.error(error));
+      continue;
+    }
     run.starting = true;
     const job = run.queuedAction === "implementation" ? implement : analyze;
     const pending = job(run).catch((error) => console.error(error)).finally(async () => {
@@ -367,10 +364,21 @@ function drainQueue() {
   }
 }
 
+function enforceBudget(run) {
+  if (!['queued', 'running', 'approved'].includes(run.state)) return false;
+  const reason = budgetReason(run, settings, repositoryTokens(run.repository));
+  if (!reason) return false;
+  exceedBudget(run, reason);
+  stopChild(processes.get(run.id));
+  return true;
+}
+
 async function retry(run) {
   if (run.starting || processes.has(run.id)) throw new Error("Run is still stopping; wait before retrying");
   const draft = structuredClone(run);
   prepareRetry(draft);
+  const reason = budgetReason(run, settings, repositoryTokens(run.repository));
+  if (reason) throw new Error(reason);
   if (draft.phase === "analysis") {
     await cleanupWorktree(run);
   } else {
@@ -436,7 +444,7 @@ async function api(req, res, url) {
     eventClients.add(res);
     res.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
     res.write(`event: auth\ndata: ${JSON.stringify(auth.snapshot())}\n\n`);
-    const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15000);
+    const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15000);
     req.on("close", () => { clearInterval(heartbeat); eventClients.delete(res); });
     return;
   }
@@ -465,16 +473,12 @@ async function api(req, res, url) {
     return send(res, 200, settings);
   }
   if (req.method === "PUT" && url.pathname === "/api/settings") {
-    const body = await jsonBody(req);
-    const next = {
-      maxConcurrentRuns: Number(body.maxConcurrentRuns),
-      maxTokensPerRun: Number(body.maxTokensPerRun),
-      maxTokensPerRepository: Number(body.maxTokensPerRepository),
-    };
-    if (!Number.isInteger(next.maxConcurrentRuns) || next.maxConcurrentRuns < 1 || next.maxConcurrentRuns > 8) throw new Error("Concurrent runs must be between 1 and 8");
-    if (![next.maxTokensPerRun, next.maxTokensPerRepository].every((value) => Number.isInteger(value) && value >= 0)) throw new Error("Token limits must be non-negative integers");
+    const next = validateSettings(await jsonBody(req));
+    await saveJson(settingsFile, next);
     settings = next;
-    await persistSettings();
+    broadcast('settings', settings);
+    const stopped = [...runs.values()].filter(enforceBudget);
+    if (stopped.length) await persist();
     drainQueue();
     return send(res, 200, settings);
   }
@@ -532,7 +536,7 @@ async function api(req, res, url) {
     if (settings.maxTokensPerRepository > 0 && used >= settings.maxTokensPerRepository) {
       throw new Error(`Repository token quota reached (${used.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`);
     }
-    const run = createRun({ id: randomUUID(), repository, prompt, mode, projectId: project?.id, templateId: template?.id });
+    const run = createRun({ id: randomUUID(), repository, prompt, task: body.prompt.trim(), templatePrompt: template?.prompt || null, mode, projectId: project?.id, templateId: template?.id });
     runs.set(run.id, run);
     if (project) {
       project.lastUsedAt = new Date().toISOString();
@@ -568,6 +572,8 @@ async function api(req, res, url) {
     } else if (match[2] === "apply") {
       await applyChanges(run);
     } else {
+      const reason = budgetReason(run, settings, repositoryTokens(run.repository));
+      if (reason) throw new Error(reason);
       approveRun(run);
       run.queuedAction = "implementation";
       drainQueue();
