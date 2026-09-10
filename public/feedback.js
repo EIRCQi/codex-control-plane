@@ -13,7 +13,7 @@ export function notify(message, {kind = 'success', action} = {}) {
     });
     toast.append(button);
   }
-  const close = document.createElement('button'); close.type = 'button'; close.className = 'icon'; close.textContent = '×'; close.setAttribute('aria-label','Dismiss notification');
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'icon'; close.textContent = '×'; close.setAttribute('aria-label','关闭通知');
   close.addEventListener('click', () => toast.remove()); toast.append(close);
   region.append(toast);
   while (region.children.length > 4) region.firstElementChild.remove();

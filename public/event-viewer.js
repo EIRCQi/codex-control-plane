@@ -1,3 +1,5 @@
+import { eventLabel } from './locale.js';
+
 const logKey = (log) => JSON.stringify([log.at, log.type, log.message]);
 
 function countNewLogs(previous, next) {
@@ -29,7 +31,7 @@ export function createEventBuffer() {
     view() {
       return {
         paused, total: displayed.length, pending: paused ? countNewLogs(displayed, latest) : 0,
-        logs: displayed.filter((log) => !query || `${log.type} ${log.message}`.toLowerCase().includes(query)),
+        logs: displayed.filter((log) => !query || `${log.type} ${eventLabel(log.type)} ${log.message}`.toLowerCase().includes(query)),
       };
     },
   };
@@ -50,7 +52,7 @@ export function createEventViewer(root, {isActive}) {
 
   function writeText(node, value) { if (node.textContent !== value) node.textContent = value; }
   function statusText(view) {
-    return view.paused ? `Display paused · ${view.pending} newer events available. The task continues running.` : following ? 'Following latest events' : 'Reading earlier events · use Jump to latest to follow';
+    return view.paused ? `已暂停显示，有 ${view.pending} 条新事件可查看；任务仍在执行。` : following ? '正在跟随最新事件' : '正在查看较早事件，点击“跳到最新”恢复跟随';
   }
   function restoreScroll() {
     if (!isActive()) return;
@@ -74,19 +76,19 @@ export function createEventViewer(root, {isActive}) {
         const doc = root.ownerDocument;
         node = doc.createElement('div');
         const time = doc.createElement('time'), type = doc.createElement('b'), message = doc.createElement('span');
-        time.textContent = new Date(log.at).toLocaleTimeString(); time.dateTime = log.at;
-        type.textContent = log.type; message.textContent = log.message;
+        time.textContent = new Date(log.at).toLocaleTimeString('zh-CN'); time.dateTime = log.at;
+        type.textContent = eventLabel(log.type); type.title = log.type; message.textContent = log.message;
         node.append(time, type, message); rows.set(key, node);
       }
       if (lines.children[index] !== node) lines.insertBefore(node, lines.children[index] || null);
     });
-    pause.textContent = view.paused ? 'Resume display' : 'Pause display';
+    pause.textContent = view.paused ? '恢复显示' : '暂停显示';
     pause.setAttribute('aria-pressed', String(view.paused));
-    latest.textContent = view.paused ? 'Resume & follow' : 'Jump to latest';
-    writeText(count, `${view.logs.length} of ${view.total} events · latest 500 kept`);
+    latest.textContent = view.paused ? '恢复并跟随最新事件' : '跳到最新';
+    writeText(count, `显示 ${view.logs.length} / ${view.total} 条事件 · 最多保留最近 500 条`);
     writeText(status, statusText(view));
     empty.hidden = view.logs.length > 0;
-    writeText(empty, view.total ? 'No matching events. Change or clear your search.' : 'No Codex events yet.');
+    writeText(empty, view.total ? '没有匹配的事件，请调整或清空搜索条件。' : '暂无 Codex 事件。');
     restoreScroll();
   }
   search.addEventListener('input', () => {

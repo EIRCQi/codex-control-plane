@@ -66,7 +66,7 @@ test('event controls retain existing rows, freeze display and resume with the la
   get('pause').event('click');
   viewer.update({id:'one',logs:[log(1,'<img src=x>'),log(2),log(3),log(4)]});
   assert.equal(get('lines').children.length,3);
-  assert.match(get('status').textContent,/1 newer events/);
+  assert.match(get('status').textContent,/1 条新事件/);
   get('latest').event('click');
   assert.equal(get('lines').children.length,4);
   assert.equal(get('pause').attrs.get('aria-pressed'),'false');

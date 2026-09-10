@@ -1,8 +1,25 @@
-# Codex Control Plane
+# Codex 控制台
 
-A local-first control plane for running Codex against real Git repositories with explicit approval before Codex modifies project files.
+在本机调用 Codex，管理任务、审批代码变更并查看执行用量。
 
-## Latest update: v0.4.1 — reliable local Runner detection
+## 最新更新：v0.5.0 中文界面
+
+主界面、登录引导、任务创建与详情、审批操作、通知、项目与模板、用量和环境提示现已使用简体中文。内置模板也提供中文指令；历史记录和用户自定义内容保留原文。事件既可按中文名称搜索，也可按原始事件标识搜索。
+
+第一次使用建议先完成一次“代码审查”：检查环境并登录 → 添加本地 Git 仓库 → 新建任务 → 选择“代码审查”模板 → 开始审查 → 在“输出”中看报告。需要修改文件时，再使用“先分析，审批后实施”，分别批准隔离修改和最终应用。应用补丁只写回本机，Git 提交和推送仍由你完成。
+
+首页新增“怎么使用”说明；完整步骤、任务示例和故障排查见 [中文使用指南](docs/GETTING_STARTED.zh-CN.md)。
+
+先正常退出原执行器，再更新并重启：
+
+```bash
+git pull --ff-only
+npm run open
+```
+
+刷新浏览器页面；出现更新提示时点击“重新加载”。本次无需安装新依赖或迁移数据。76 项本地 Node 测试、脚本语法及 HTML/资源检查通过；控制器测试不替代真实浏览器布局和 Mac 原生交互验证，本次未构建安装包。
+
+## v0.4.1 — reliable local Runner detection
 
 Fixed a reproduced Node 24.19.0 case where a healthy local Runner was reported as unresponsive because the health request used Node's globally configured HTTP proxy. Loopback probes now use a separate direct agent. Codex/Git proxy settings and the process environment are unchanged. Node documents how proxy settings affect the global agent in its [HTTP proxy documentation](https://nodejs.org/api/http.html#built-in-proxy-support).
 

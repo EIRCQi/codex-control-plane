@@ -39,11 +39,11 @@ test('login controls block duplicates, keep newer streamed state and clear fallb
   assert.equal(h.get('#login-link').hidden, false); assert.equal(h.get('#setup-project').disabled, true);
   resolveLogin(response(state(2, 'starting', true)));
   await until(() => !h.get('#cancel-login').disabled);
-  assert.equal(h.get('#login-status').textContent, 'Waiting for browser');
+  assert.equal(h.get('#login-status').textContent, '等待浏览器授权');
   h.ui.accept(state(4, 'signed_in'));
   assert.equal(h.get('#login-link').hidden, true); assert.equal(h.get('#login-link').href, undefined);
   assert.equal(h.get('#login-codex').hidden, true); assert.equal(h.busy.at(-1), false);
-  assert.deepEqual(h.notifications, ['Codex login is ready']);
+  assert.deepEqual(h.notifications, ['Codex 登录已就绪']);
   h.get('#setup-project').click(); h.ui.projectsChanged([{id:'project'}]); h.get('#setup-project').click();
   assert.deepEqual(h.navigation, ['signed-in', 'project', 'task']);
 });
@@ -56,10 +56,10 @@ test('reconnecting during a slow check schedules a fresh check and ignores the o
   h.ui.accept({...state(0, 'unknown'), instanceId:'runner-b'});
   requests[0](response(state(99, 'signed_in')));
   await until(() => requests.length === 2);
-  assert.equal(h.get('#login-status').textContent, 'Login not checked');
+  assert.equal(h.get('#login-status').textContent, '尚未检查登录');
   requests[1](response({...state(2), instanceId:'runner-b'}));
   await until(() => !h.get('#refresh-login').disabled);
-  assert.equal(h.get('#login-status').textContent, 'Sign in required');
+  assert.equal(h.get('#login-status').textContent, '需要登录');
 });
 
 test('failed login requests release controls for retry and disconnection hides browser links', async t => {

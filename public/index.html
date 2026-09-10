@@ -1,106 +1,117 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#10161e" />
-    <meta name="application-name" content="Codex Control Plane" />
-    <title>Codex Control Plane</title>
+    <meta name="application-name" content="Codex 控制台" />
+    <title>Codex 控制台</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <a class="skip-link" href="#runs-panel">Skip to tasks</a>
+    <a class="skip-link" href="#runs-panel">跳转到任务列表</a>
     <aside>
-      <div class="brand"><span class="brand-mark">C</span><span>Control Plane</span></div>
-      <nav aria-label="Main navigation">
-        <button class="nav active" data-target="runs-panel">⌁ <span>Mission Control</span></button>
-        <button class="nav" data-target="catalog-panel">◇ <span>Projects & templates</span></button>
-        <button class="nav" id="approvals-nav">✓ <span>Approvals</span><b id="approval-count">0</b></button>
-        <button class="nav" data-target="usage-panel">⌇ <span>Usage</span></button>
-        <button class="nav" data-target="environment-panel">◈ <span>Environment</span></button>
-        <button class="nav" data-target="budget-settings">⚙ <span>Settings</span></button>
+      <div class="brand"><span class="brand-mark">C</span><span>Codex 控制台</span></div>
+      <nav aria-label="主导航">
+        <button class="nav active" data-target="runs-panel">⌁ <span>任务控制台</span></button>
+        <button class="nav" data-target="catalog-panel">◇ <span>项目与模板</span></button>
+        <button class="nav" id="approvals-nav">✓ <span>审批中心</span><b id="approval-count">0</b></button>
+        <button class="nav" data-target="usage-panel">⌇ <span>用量统计</span></button>
+        <button class="nav" data-target="environment-panel">◈ <span>环境检查</span></button>
+        <button class="nav" data-target="budget-settings">⚙ <span>设置</span></button>
       </nav>
-      <div class="local-status"><i></i><div><strong>Local runner</strong><small>Connected</small></div></div>
+      <div class="local-status"><i></i><div><strong>本地执行器</strong><small>已连接</small></div></div>
     </aside>
     <main>
-      <nav class="mobile-nav" aria-label="Section navigation">
-        <button class="nav active" data-target="runs-panel">Tasks</button><button class="nav" data-filter-nav="approvals">Approvals</button><button class="nav" data-target="catalog-panel">Projects</button><button class="nav" data-target="usage-panel">Usage</button><button class="nav" data-target="environment-panel">Environment</button><button class="nav" data-target="budget-settings">Settings</button>
+      <nav class="mobile-nav" aria-label="页面导航">
+        <button class="nav active" data-target="runs-panel">任务</button><button class="nav" data-filter-nav="approvals">审批中心</button><button class="nav" data-target="catalog-panel">项目</button><button class="nav" data-target="usage-panel">用量统计</button><button class="nav" data-target="environment-panel">环境检查</button><button class="nav" data-target="budget-settings">设置</button>
       </nav>
       <header>
-        <div><p class="eyebrow">LOCAL WORKSPACE <span id="app-version"></span></p><h1>Mission Control</h1></div>
+        <div><p class="eyebrow">本地工作区 <span id="app-version"></span></p><h1>任务控制台</h1></div>
         <div class="header-actions">
-          <button class="secondary install-app" id="install-app" type="button" hidden>Install app</button>
-          <button class="notification-button" id="notification-button" type="button" aria-label="Open notifications" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
-          <button class="primary" id="new-task" title="New task (N)">＋ New task</button>
+          <button class="secondary install-app" id="install-app" type="button" hidden>安装为应用</button>
+          <button class="notification-button" id="notification-button" type="button" aria-label="打开通知" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
+          <button class="primary" id="new-task" title="新建任务（N）">＋ 新建任务</button>
           <div class="notification-popover" id="notification-popover" hidden>
-            <div class="notification-head"><div><p class="eyebrow">ACTIVITY</p><h3>Notifications</h3></div><button class="text-button" id="mark-notifications-read" type="button">Mark all read</button></div>
-            <div id="notification-list" class="notification-list"><p class="notification-empty">No notifications yet.</p></div>
+            <div class="notification-head"><div><p class="eyebrow">最新动态</p><h3>通知</h3></div><button class="text-button" id="mark-notifications-read" type="button">全部标为已读</button></div>
+            <div id="notification-list" class="notification-list"><p class="notification-empty">暂无通知。</p></div>
             <div class="notification-settings">
-              <label><input id="notify-approvals" type="checkbox" /> Approval requests</label>
-              <label><input id="notify-results" type="checkbox" /> Completed & failed runs</label>
-              <button class="secondary" id="enable-system-notifications" type="button">Enable desktop alerts</button>
+              <label><input id="notify-approvals" type="checkbox" /> 审批请求</label>
+              <label><input id="notify-results" type="checkbox" /> 任务完成与失败</label>
+              <button class="secondary" id="enable-system-notifications" type="button">启用桌面提醒</button>
               <small id="notification-permission-status"></small>
             </div>
           </div>
         </div>
       </header>
-      <p id="connection-banner" class="connection-banner" role="status">Connecting to local Runner… If it is stopped, run npm start and leave it running.</p>
-      <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="Dismiss error">×</button></div>
+      <p id="connection-banner" class="connection-banner" role="status">正在连接本地执行器……若服务已停止，请运行 npm run open，并保持终端打开。</p>
+      <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="关闭错误提示">×</button></div>
       <section id="setup-panel" class="setup-panel" aria-labelledby="setup-title">
-        <div class="setup-heading"><div><p class="eyebrow">QUICK START</p><h2 id="setup-title">Get ready to run Codex</h2></div><span id="login-status" class="setup-status" role="status">Login not checked</span></div>
+        <div class="setup-heading"><div><p class="eyebrow">快速开始</p><h2 id="setup-title">开始使用 Codex</h2></div><span id="login-status" class="setup-status" role="status">尚未检查登录</span></div>
         <div class="setup-steps">
-          <div><span class="setup-number">1</span><div><strong>Check environment</strong><p id="setup-tools-state">Checking local tools…</p></div><button type="button" class="secondary" id="setup-environment">Environment</button></div>
-          <div><span class="setup-number">2</span><div><strong>Connect Codex</strong><p id="setup-account-state">Connect your Codex account</p></div><div class="login-actions"><button type="button" class="primary" id="login-codex">Sign in with ChatGPT</button><button type="button" class="secondary" id="cancel-login" hidden>Cancel login</button><button type="button" class="text-button" id="refresh-login">Check login</button></div></div>
-          <div><span class="setup-number">3</span><div><strong>Choose a project</strong><p id="setup-project-state">Register a local Git repository</p></div><button type="button" class="secondary" id="setup-project">Add project</button></div>
+          <div><span class="setup-number">1</span><div><strong>检查运行环境</strong><p id="setup-tools-state">正在检查本地工具……</p></div><button type="button" class="secondary" id="setup-environment">环境检查</button></div>
+          <div><span class="setup-number">2</span><div><strong>登录 Codex</strong><p id="setup-account-state">连接你的 Codex 账号</p></div><div class="login-actions"><button type="button" class="primary" id="login-codex">使用 ChatGPT 登录</button><button type="button" class="secondary" id="cancel-login" hidden>取消登录</button><button type="button" class="text-button" id="refresh-login">检查登录</button></div></div>
+          <div><span class="setup-number">3</span><div><strong>选择项目</strong><p id="setup-project-state">添加本地 Git 仓库</p></div><button type="button" class="secondary" id="setup-project">添加项目</button></div>
         </div>
-        <div class="login-guidance"><p id="login-message"></p><a id="login-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" hidden>Open sign-in page ↗</a><p id="login-error" class="error" role="alert"></p><details><summary>Need help signing in?</summary><p>Install Codex CLI, then use Sign in with ChatGPT. If the browser flow does not finish, run <code>codex login</code> in your terminal and click Check login here. Saved credentials stay with Codex.</p><a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener noreferrer">Install Codex CLI ↗</a> · <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener noreferrer">Login help ↗</a></details></div>
+        <div class="login-guidance"><p id="login-message"></p><a id="login-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" hidden>打开登录页面 ↗</a><p id="login-error" class="error" role="alert"></p><details><summary>登录遇到问题？</summary><p>先安装 Codex CLI，再点击“使用 ChatGPT 登录”。如果网页授权未完成，可在终端运行 <code>codex login</code>，然后返回点击“检查登录”。登录凭据由 Codex 保存。</p><a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener noreferrer">安装 Codex CLI ↗</a> · <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener noreferrer">查看登录帮助 ↗</a></details></div>
+        <details class="usage-help">
+          <summary>怎么使用？先完成一次只读审查</summary>
+          <ol>
+            <li><strong>检查环境并登录：</strong>确认 Git、Codex CLI 可用，点击“使用 ChatGPT 登录”完成浏览器授权。</li>
+            <li><strong>添加项目：</strong>填写要操作的本地 Git 仓库绝对路径，例如 <code>/Users/你的用户名/Projects/my-project</code>。可在项目目录运行 <code>pwd</code> 查看路径。</li>
+            <li><strong>先试只读审查：</strong>点击“新建任务”，选择项目与“代码审查”模板，填写“检查项目结构和启动方式，用中文给我一份报告”，再点击“开始审查”。</li>
+            <li><strong>查看进度和结果：</strong>打开“查看详情”，在“事件”中看实时进度，在“输出”中看报告；只读审查结束后任务直接完成。</li>
+            <li><strong>需要修改代码时：</strong>选择“先分析，审批后实施”。阅读方案后点击“批准并执行”；实施完成后检查“代码变更”，再选择“应用到原仓库”或“丢弃变更”。</li>
+          </ol>
+          <p>新建任务前，请先提交或妥善保存仓库中已有的修改。“应用到原仓库”会把变更写回本机并加入 Git 暂存区，之后仍需你自行提交和推送到 GitHub。</p>
+        </details>
       </section>
       <section class="metrics">
-        <button class="metric-action" data-filter-nav="active"><span>Active runs</span><strong id="active-runs">0</strong><small>View running tasks →</small></button>
-        <button class="metric-action" data-filter-nav="approvals"><span>Needs approval</span><strong id="needs-approval">0</strong><small>Review pending actions →</small></button>
-        <button class="metric-action" data-filter-nav="completed"><span>Completed</span><strong id="completed-runs">0</strong><small>View completed tasks →</small></button>
-        <article><span>Security mode</span><strong class="safe">Safe</strong><small>Approval required</small></article>
+        <button class="metric-action" data-filter-nav="active"><span>执行中的任务</span><strong id="active-runs">0</strong><small>查看运行任务 →</small></button>
+        <button class="metric-action" data-filter-nav="approvals"><span>待审批</span><strong id="needs-approval">0</strong><small>处理审批请求 →</small></button>
+        <button class="metric-action" data-filter-nav="completed"><span>已完成</span><strong id="completed-runs">0</strong><small>查看完成结果 →</small></button>
+        <article><span>权限模式</span><strong class="safe">审批保护</strong><small>等待审批</small></article>
       </section>
       <section class="panel" id="runs-panel" tabindex="-1">
-        <div class="panel-title"><div><p class="eyebrow">EXECUTION QUEUE</p><h2>Recent runs</h2></div><span class="live"><i></i> Live</span></div>
-        <div class="quick-filters" role="group" aria-label="Quick task filters">
-          <button type="button" class="filter-chip" data-quick-filter="" aria-pressed="true">All states</button><button type="button" class="filter-chip" data-quick-filter="active" aria-pressed="false">Running</button><button type="button" class="filter-chip" data-quick-filter="approvals" aria-pressed="false">Needs approval</button><button type="button" class="filter-chip" data-quick-filter="failed" aria-pressed="false">Failed</button>
-          <button type="button" class="text-button" id="clear-filters" hidden>Clear filters</button>
+        <div class="panel-title"><div><p class="eyebrow">执行队列</p><h2>任务列表</h2></div><span class="live"><i></i> 实时更新</span></div>
+        <div class="quick-filters" role="group" aria-label="任务快捷筛选">
+          <button type="button" class="filter-chip" data-quick-filter="" aria-pressed="true">全部状态</button><button type="button" class="filter-chip" data-quick-filter="active" aria-pressed="false">执行中</button><button type="button" class="filter-chip" data-quick-filter="approvals" aria-pressed="false">待审批</button><button type="button" class="filter-chip" data-quick-filter="failed" aria-pressed="false">失败</button>
+          <button type="button" class="text-button" id="clear-filters" hidden>清除筛选</button>
         </div>
         <div class="run-filters">
-          <input id="run-search" type="search" aria-label="Search tasks" aria-keyshortcuts="/" placeholder="Search tasks or repositories…" />
-          <select id="state-filter" aria-label="Task status"><option value="">All states</option><option value="active">Active</option><option value="approvals">All approvals</option><option value="awaiting_approval">Write approval</option><option value="awaiting_merge">Review changes</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="discarded">Discarded</option><option value="cancelled">Cancelled</option><option value="budget_exceeded">Budget stopped</option></select>
-          <select id="project-filter" aria-label="Filter by project"><option value="">All projects</option></select>
-          <label class="archive-toggle"><input id="show-archived" type="checkbox" /> Show archived</label>
+          <input id="run-search" type="search" aria-label="搜索任务" aria-keyshortcuts="/" placeholder="搜索任务内容或仓库路径……" />
+          <select id="state-filter" aria-label="任务状态"><option value="">全部状态</option><option value="active">执行中</option><option value="approvals">全部待审批</option><option value="awaiting_approval">写入审批</option><option value="awaiting_merge">变更审批</option><option value="completed">已完成</option><option value="failed">失败</option><option value="discarded">已丢弃</option><option value="cancelled">已取消</option><option value="budget_exceeded">预算超限</option></select>
+          <select id="project-filter" aria-label="按项目筛选"><option value="">全部项目</option></select>
+          <label class="archive-toggle"><input id="show-archived" type="checkbox" /> 显示已归档任务</label>
           <span id="filter-count" role="status"></span>
         </div>
-        <div id="empty" class="empty"><div>⌁</div><h3>No runs yet</h3><p>Create a task to begin with read-only analysis.</p><button class="secondary" id="empty-action" type="button">Create a task</button></div>
+        <div id="empty" class="empty"><div>⌁</div><h3>暂无任务</h3><p>新建任务后，Codex 会先进行只读分析。</p><button class="secondary" id="empty-action" type="button">新建任务</button></div>
         <div id="runs" class="runs"></div>
-        <div class="run-pagination"><button class="secondary" id="load-more" hidden>Show 20 more</button></div>
+        <div class="run-pagination"><button class="secondary" id="load-more" hidden>再显示 20 条</button></div>
       </section>
       <section class="catalog-panel" id="catalog-panel">
-        <div class="panel-title"><div><p class="eyebrow">WORKSPACE CATALOG</p><h2>Projects & templates</h2></div><span class="usage-note">Stored locally</span></div>
+        <div class="panel-title"><div><p class="eyebrow">项目管理</p><h2>项目与模板</h2></div><span class="usage-note">保存在本机</span></div>
         <div class="catalog-grid">
           <div class="catalog-column">
-            <div class="catalog-head"><div><h3>Registered projects</h3><p>Select a project instead of entering its path for every run.</p></div><button class="secondary" id="show-project-form">＋ Add project</button></div>
+            <div class="catalog-head"><div><h3>已添加的项目</h3><p>添加仓库后，新建任务时直接选择项目即可。</p></div><button class="secondary" id="show-project-form">＋ 添加项目</button></div>
             <form class="inline-form" id="project-form" hidden>
-              <input name="name" required aria-label="Project name" placeholder="Project name" />
-              <input name="repository" required aria-label="Repository path" placeholder="/absolute/path/to/repository" />
-              <button class="primary">Register</button><button type="button" class="secondary form-cancel">Cancel</button>
+              <input name="name" required aria-label="项目名称" placeholder="项目名称" />
+              <input name="repository" required aria-label="本地仓库路径" placeholder="例如：/Users/你的用户名/Projects/my-project" />
+              <button class="primary">添加</button><button type="button" class="secondary form-cancel">取消</button>
               <p class="form-message" role="status"></p>
             </form>
             <div class="catalog-list" id="project-list"></div>
           </div>
           <div class="catalog-column">
-            <div class="catalog-head"><div><h3>Task templates</h3><p>Turn repeatable instructions into one-click starting points.</p></div><button class="secondary" id="show-template-form">＋ New template</button></div>
+            <div class="catalog-head"><div><h3>任务模板</h3><p>选择模板，快速填写常用任务指令。</p></div><button class="secondary" id="show-template-form">＋ 新建模板</button></div>
             <form class="inline-form template-form" id="template-form" hidden>
-              <input name="name" required aria-label="Template name" placeholder="Template name" />
-              <input name="description" aria-label="Template description" placeholder="Short description" />
-              <textarea name="prompt" required aria-label="Template instructions" rows="4" placeholder="Instructions containing {{task}}"></textarea>
-              <button class="primary">Save</button><button type="button" class="secondary form-cancel">Cancel</button>
+              <input name="name" required aria-label="模板名称" placeholder="模板名称" />
+              <input name="description" aria-label="模板说明" placeholder="简短说明" />
+              <textarea name="prompt" required aria-label="模板指令" rows="4" placeholder="填写指令，并使用 {{task}} 插入任务内容"></textarea>
+              <button class="primary">保存</button><button type="button" class="secondary form-cancel">取消</button>
               <p class="form-message" role="status"></p>
             </form>
             <div class="catalog-list" id="template-list"></div>
@@ -108,38 +119,38 @@
         </div>
       </section>
       <section class="usage-panel" id="usage-panel">
-        <div class="panel-title"><div><p class="eyebrow">OBSERVABILITY</p><h2>Usage overview</h2></div><span class="usage-note">Event-reported tokens</span></div>
+        <div class="panel-title"><div><p class="eyebrow">执行用量</p><h2>用量概览</h2></div><span class="usage-note">按执行事件记录 Token</span></div>
         <div class="usage-metrics">
-          <article><span>Total tokens</span><strong id="total-tokens">0</strong><small>Across all local runs</small></article>
-          <article><span>Input tokens</span><strong id="input-tokens">0</strong><small id="cached-tokens">0 cached</small></article>
-          <article><span>Output tokens</span><strong id="output-tokens">0</strong><small>Model responses</small></article>
-          <article><span>Agent time</span><strong id="agent-time">0s</strong><small>Codex process runtime</small></article>
+          <article><span>Token 总量</span><strong id="total-tokens">0</strong><small>所有本地任务的累计用量</small></article>
+          <article><span>输入 Token</span><strong id="input-tokens">0</strong><small id="cached-tokens">缓存命中 0</small></article>
+          <article><span>输出 Token</span><strong id="output-tokens">0</strong><small>模型回复消耗</small></article>
+          <article><span>执行时长</span><strong id="agent-time">0 秒</strong><small>Codex 进程运行时间</small></article>
         </div>
         <div class="usage-grid">
-          <div class="token-mix"><h3>Token mix</h3><div class="bar"><i id="input-bar"></i><em id="cached-bar"></em><b id="output-bar"></b></div><div class="legend"><span><i></i>Input</span><span><i></i>Output</span><span><i></i>Cached input</span></div></div>
-          <div class="model-usage"><h3>Model usage</h3><div id="model-list" class="model-list"><p>No model data yet</p></div></div>
+          <div class="token-mix"><h3>Token 构成</h3><div class="bar"><i id="input-bar"></i><em id="cached-bar"></em><b id="output-bar"></b></div><div class="legend"><span><i></i>输入</span><span><i></i>输出</span><span><i></i>缓存输入</span></div></div>
+          <div class="model-usage"><h3>按模型统计</h3><div id="model-list" class="model-list"><p>暂无模型用量数据</p></div></div>
         </div>
-        <div class="usage-table-wrap"><table><thead><tr><th>Task</th><th>Model</th><th>Input</th><th>Cached</th><th>Output</th><th>Total</th><th>Runtime</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
-        <p class="cost-note">Cost is intentionally not estimated: ChatGPT-authenticated Codex usage does not map directly to API per-token pricing.</p>
+        <div class="usage-table-wrap"><table><thead><tr><th>任务</th><th>模型</th><th>输入</th><th>缓存</th><th>输出</th><th>合计</th><th>运行时长</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
+        <p class="cost-note">这里只统计实际 Token；通过 ChatGPT 登录的 Codex 用量无法直接按 API 单价换算费用。</p>
         <form class="budget-settings" id="budget-settings">
-          <div><p class="eyebrow">GUARDRAILS</p><h3>Budgets & concurrency</h3><p>Use 0 for an unlimited token budget.</p></div>
-          <label>Concurrent runs<input name="maxConcurrentRuns" type="number" min="1" max="8" required /></label>
-          <label>Tokens per run<input name="maxTokensPerRun" type="number" min="0" step="1000" required /></label>
-          <label>Tokens per repository<input name="maxTokensPerRepository" type="number" min="0" step="1000" required /></label>
-          <button class="primary">Save limits</button>
+          <div><p class="eyebrow">用量控制</p><h3>预算与并发</h3><p>Token 预算填 0 表示不限制。</p></div>
+          <label>最大并发数<input name="maxConcurrentRuns" type="number" min="1" max="8" required /></label>
+          <label>单任务 Token 上限<input name="maxTokensPerRun" type="number" min="0" step="1000" required /></label>
+          <label>单仓库累计 Token 配额<input name="maxTokensPerRepository" type="number" min="0" step="1000" required /></label>
+          <button class="primary">保存设置</button>
           <span id="settings-status"></span>
         </form>
       </section>
       <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
-        <div class="panel-title"><div><p class="eyebrow">GET READY</p><h2 id="environment-title">Environment</h2></div><button class="secondary" id="refresh-environment" type="button">Check again</button></div>
-        <div class="environment-overview"><strong class="environment-summary" id="environment-summary">Waiting for local runner</strong><small id="environment-meta"></small></div>
+        <div class="panel-title"><div><p class="eyebrow">运行准备</p><h2 id="environment-title">环境检查</h2></div><button class="secondary" id="refresh-environment" type="button">重新检查</button></div>
+        <div class="environment-overview"><strong class="environment-summary" id="environment-summary">等待连接本地执行器</strong><small id="environment-meta"></small></div>
         <div class="environment-checks" id="environment-checks"></div>
-        <details class="runtime-options"><summary>Configure executable paths</summary>
-          <p>Leave paths empty for automatic detection. Finish or cancel pending tasks before changing paths. On Windows, select native .exe files.</p>
+        <details class="runtime-options"><summary>配置程序路径</summary>
+          <p>留空即可自动查找。修改路径前，请先完成或取消待处理任务。Windows 请填写原生 .exe 文件路径。</p>
           <form id="runtime-settings">
-            <label>Git executable<input name="gitPath" spellcheck="false" placeholder="Automatic detection" /><small id="gitPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_GIT_BIN. Restart the runner after changing that environment variable.</small></label>
-            <label>Codex executable<input name="codexPath" spellcheck="false" placeholder="Automatic detection" /><small id="codexPath-override" hidden>Overridden by CODEX_CONTROL_PLANE_CODEX_BIN. Restart the runner after changing that environment variable.</small></label>
-            <button class="primary">Save &amp; check</button>
+            <label>Git 程序路径<input name="gitPath" spellcheck="false" placeholder="自动查找" /><small id="gitPath-override" hidden>当前由 CODEX_CONTROL_PLANE_GIT_BIN 环境变量指定。修改该变量后需要重启执行器。</small></label>
+            <label>Codex 程序路径<input name="codexPath" spellcheck="false" placeholder="自动查找" /><small id="codexPath-override" hidden>当前由 CODEX_CONTROL_PLANE_CODEX_BIN 环境变量指定。修改该变量后需要重启执行器。</small></label>
+            <button class="primary">保存并检查</button>
           </form>
         </details>
         <p id="environment-status" class="environment-status" role="status" aria-live="polite"></p>
@@ -147,56 +158,56 @@
     </main>
     <dialog id="task-dialog" aria-labelledby="task-title">
       <form id="task-form">
-        <div class="dialog-head"><div><p class="eyebrow">NEW RUN</p><h2 id="task-title">Give Codex a task</h2></div><button type="button" class="icon" id="close-dialog" aria-label="Close task form">×</button></div>
-        <div class="modal-feedback" aria-label="Task feedback"></div>
+        <div class="dialog-head"><div><p class="eyebrow">新建任务</p><h2 id="task-title">让 Codex 执行任务</h2></div><button type="button" class="icon" id="close-dialog" aria-label="关闭新建任务窗口">×</button></div>
+        <div class="modal-feedback" aria-label="任务操作反馈"></div>
         <fieldset>
-        <label>Project<select name="projectId" required id="task-project"><option value="">Register a project first</option></select></label>
-        <label>Template<select name="templateId" id="task-template"><option value="">No template</option></select><small id="task-template-note"></small></label>
-        <label>Task mode<select name="mode" id="task-mode"><option value="implement">Analyze, then implement with approval</option><option value="review">Read-only review</option></select></label>
-        <label>Task details<textarea name="prompt" required rows="5" placeholder="Describe the change and expected outcome…"></textarea></label>
-        <details class="task-preview"><summary>Preview task instructions</summary><pre id="task-preview"></pre></details>
-        <div class="policy"><span>◉</span><div><strong id="task-policy-title">Protected execution</strong><p id="task-policy-text">Analysis runs read-only. You must approve before Codex can modify files.</p></div></div>
-        <div class="draft-row"><span id="draft-status" role="status"></span><button type="button" class="text-button" id="reset-task">Clear draft</button></div>
-        <div class="dialog-actions"><small class="shortcut-hint">⌘ / Ctrl + Enter to start</small><button type="button" class="secondary" id="cancel-dialog">Close</button><button class="primary" id="start-task">Start analysis</button></div>
+        <label>项目<select name="projectId" required id="task-project"><option value="">请先添加项目</option></select></label>
+        <label>模板<select name="templateId" id="task-template"><option value="">不使用模板</option></select><small id="task-template-note"></small></label>
+        <label>任务模式<select name="mode" id="task-mode"><option value="implement">先分析，审批后实施</option><option value="review">只读审查</option></select></label>
+        <label>任务说明<textarea name="prompt" required rows="5" placeholder="描述你想解决的问题、修改范围和验收标准……"></textarea></label>
+        <details class="task-preview"><summary>预览完整任务指令</summary><pre id="task-preview"></pre></details>
+        <div class="policy"><span>◉</span><div><strong id="task-policy-title">审批保护</strong><p id="task-policy-text">先进行只读分析，批准后 Codex 才能在隔离工作区修改文件。</p></div></div>
+        <div class="draft-row"><span id="draft-status" role="status"></span><button type="button" class="text-button" id="reset-task">清空草稿</button></div>
+        <div class="dialog-actions"><small class="shortcut-hint">按 ⌘ / Ctrl + Enter 开始</small><button type="button" class="secondary" id="cancel-dialog">关闭</button><button class="primary" id="start-task">开始分析</button></div>
         </fieldset>
         <p id="form-error" class="error" role="alert"></p>
       </form>
     </dialog>
     <dialog id="run-dialog" class="run-dialog" aria-labelledby="detail-title">
       <div class="detail-shell">
-        <div class="dialog-head"><div><p class="eyebrow">RUN DETAILS</p><h2 id="detail-title">Task</h2></div><button type="button" class="icon" id="close-run-dialog" aria-label="Close task details">×</button></div>
-        <div class="modal-feedback" aria-label="Task feedback"></div>
-        <div class="detail-tabs" role="tablist" aria-label="Task details sections">
-          <button type="button" id="tab-overview" role="tab" data-detail-tab="overview" aria-controls="detail-overview" aria-selected="true">Overview</button>
-          <button type="button" id="tab-output" role="tab" data-detail-tab="output" aria-controls="detail-output" aria-selected="false" tabindex="-1">Output</button>
-          <button type="button" id="tab-events" role="tab" data-detail-tab="events" aria-controls="detail-events" aria-selected="false" tabindex="-1">Events</button>
-          <button type="button" id="tab-diff" role="tab" data-detail-tab="diff" aria-controls="detail-diff" aria-selected="false" tabindex="-1">Diff</button>
+        <div class="dialog-head"><div><p class="eyebrow">任务详情</p><h2 id="detail-title">任务</h2></div><button type="button" class="icon" id="close-run-dialog" aria-label="关闭任务详情">×</button></div>
+        <div class="modal-feedback" aria-label="任务操作反馈"></div>
+        <div class="detail-tabs" role="tablist" aria-label="任务详情标签页">
+          <button type="button" id="tab-overview" role="tab" data-detail-tab="overview" aria-controls="detail-overview" aria-selected="true">概览</button>
+          <button type="button" id="tab-output" role="tab" data-detail-tab="output" aria-controls="detail-output" aria-selected="false" tabindex="-1">输出</button>
+          <button type="button" id="tab-events" role="tab" data-detail-tab="events" aria-controls="detail-events" aria-selected="false" tabindex="-1">事件</button>
+          <button type="button" id="tab-diff" role="tab" data-detail-tab="diff" aria-controls="detail-diff" aria-selected="false" tabindex="-1">代码变更</button>
         </div>
         <div id="run-detail">
           <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0"><div id="detail-overview-body"></div></section>
           <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
-            <div class="content-toolbar"><h3 id="detail-output-title">Agent output</h3><button type="button" class="secondary" data-copy="output" disabled>Copy output</button></div>
+            <div class="content-toolbar"><h3 id="detail-output-title">执行结果</h3><button type="button" class="secondary" data-copy="output" disabled>复制结果</button></div>
             <div id="detail-output-body"></div>
           </section>
           <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
-            <details class="workflow-history"><summary>Workflow timeline</summary><div id="detail-timeline" class="timeline"></div></details>
+            <details class="workflow-history"><summary>工作流时间线</summary><div id="detail-timeline" class="timeline"></div></details>
             <div id="event-viewer">
-              <div class="content-toolbar"><h3>Codex events</h3><div class="event-actions"><button type="button" class="secondary" data-event-pause aria-pressed="false">Pause display</button><button type="button" class="secondary" data-event-latest>Jump to latest</button></div></div>
-              <label class="event-search">Search events<input type="search" data-event-search placeholder="Filter by event type or message…" /></label>
+              <div class="content-toolbar"><h3>Codex 事件</h3><div class="event-actions"><button type="button" class="secondary" data-event-pause aria-pressed="false">暂停显示</button><button type="button" class="secondary" data-event-latest>跳到最新</button></div></div>
+              <label class="event-search">搜索事件<input type="search" data-event-search placeholder="按事件类型或消息内容筛选……" /></label>
               <div class="event-reading-state"><span data-event-count></span><p data-event-status role="status"></p></div>
-              <div class="log-lines detail-logs" data-event-lines tabindex="0" role="region" aria-label="Codex event log"></div>
-              <p class="tab-empty" data-event-empty>No Codex events yet.</p>
+              <div class="log-lines detail-logs" data-event-lines tabindex="0" role="region" aria-label="Codex 事件日志"></div>
+              <p class="tab-empty" data-event-empty>暂无 Codex 事件。</p>
             </div>
           </section>
           <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0" hidden>
-            <div class="content-toolbar"><h3>Proposed changes</h3><button type="button" class="secondary" data-copy="diff" disabled>Copy patch</button></div>
+            <div class="content-toolbar"><h3>待审批的代码变更</h3><button type="button" class="secondary" data-copy="diff" disabled>复制补丁</button></div>
             <div id="detail-diff-body"></div>
           </section>
         </div>
         <div class="detail-footer"><p id="detail-error" class="error" role="alert"></p><div id="detail-actions" class="detail-actions"></div></div>
       </div>
     </dialog>
-    <div id="toast-region" class="toast-region" aria-label="Operation feedback"></div>
+    <div id="toast-region" class="toast-region" aria-label="操作反馈"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — 2026-09-10
+
+- Localized the main interface, onboarding, task forms/details, approvals, notifications, project/template management, usage, environment checks and desktop tray labels to Simplified Chinese. Added `zh-CN` document/manifest metadata, local date/number formatting and Chinese font fallbacks.
+- Added presentation-only translations for known control-plane messages and workflow event labels, including older saved events. Unknown errors, dynamic paths, user content, original event records and code patches remain intact. Event search accepts both Chinese labels and original identifiers. Archive empty-state actions now use an explicit action key instead of matching visible button text.
+- Translated built-in template names, descriptions and instructions while retaining their IDs, task placeholder and modes. Custom templates and existing task instructions are not rewritten. Updated the static shell cache to include the localization module.
+- Added an in-app usage guide and `docs/GETTING_STARTED.zh-CN.md`, covering login, local project paths, an initial read-only review, two-stage change approval, Git staging versus committing/pushing, usage and port troubleshooting.
+- Updated existing UI assertions and added two tests for preserving raw diagnostic/event data and searching localized event labels. All 76 local Node tests pass, along with JavaScript syntax, HTML nesting/ARIA references and module/cache-asset checks. Real browser layout and native Mac/Electron interactions remain unverified in this environment.
+
+No added dependencies, data migration or native installer publication. Stop the previous Runner, pull the update, run `npm run open` and reload the browser so the translated built-in templates and interface are loaded together.
+
 ## 0.4.1 — 2026-09-09
 
 - Fixed local health probes inheriting Node's global HTTP proxy. Reproduced on Node 24.19.0 with a healthy loopback server and a nonresponding proxy; the old launcher contacted the proxy and falsely timed out. A dedicated direct HTTP agent now handles loopback checks without changing Codex/Git proxy settings or the environment.

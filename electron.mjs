@@ -70,7 +70,7 @@ async function start() {
   const trayIcon = icon.resize({ width: process.platform === "darwin" ? 18 : 22, height: process.platform === "darwin" ? 18 : 22 });
   if (process.platform === "darwin") trayIcon.setTemplateImage(true);
   tray = new Tray(trayIcon);
-  tray.setToolTip(reusedRunner ? 'Codex Control Plane · Connected to existing Runner' : 'Codex Control Plane · Local runner active');
+  tray.setToolTip(reusedRunner ? 'Codex 控制台 · 已连接现有执行器' : 'Codex 控制台 · 本地执行器运行中');
   tray.on("click", () => window?.isVisible() ? window.hide() : showWindow());
   rebuildTrayMenu();
 }
@@ -92,7 +92,7 @@ if (!hasLock) {
   app.on("activate", showWindow);
   app.whenReady().then(start).catch((error) => {
     console.error(error);
-    dialog.showErrorBox("Unable to start Control Plane", error.code === "EADDRINUSE" ? `Port ${Number(process.env.PORT || 4310)} is occupied. Quit the other Runner before starting the desktop app.` : error.message);
+    dialog.showErrorBox("无法启动 Codex 控制台", error.code === "EADDRINUSE" ? `端口 ${Number(process.env.PORT || 4310)} 已被占用。请先退出原执行器，再打开桌面应用。` : `请检查本地执行器状态。\n\n${error.message}`);
     app.quit();
   });
 }

@@ -1,7 +1,8 @@
 {
-  "name": "Codex Control Plane",
-  "short_name": "Codex Control",
-  "description": "A local-first control plane for visible, controlled and recoverable Codex runs.",
+  "name": "Codex 控制台",
+  "short_name": "Codex 控制台",
+  "lang": "zh-CN",
+  "description": "在本地管理 Codex 任务、审批代码变更并查看执行用量。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

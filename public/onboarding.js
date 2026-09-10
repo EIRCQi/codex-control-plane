@@ -1,3 +1,5 @@
+import { messageText } from './locale.js';
+
 export function setupOnboarding({request, notify, onEnvironment, onProject, onTask, onSignedIn, onBusyChange}) {
   const panel = document.querySelector('#setup-panel');
   const status = document.querySelector('#login-status');
@@ -10,11 +12,11 @@ export function setupOnboarding({request, notify, onEnvironment, onProject, onTa
   const projectButton = document.querySelector('#setup-project');
   let state = {state:'unknown', busy:false}, report = null, projectCount = 0;
   let connected = false, pending = false, generation = 0, lastChecked = 0, refreshRequested = false;
-  const labels = {unknown:'Login not checked', checking:'Checking login…', missing:'Install Codex first', signed_out:'Sign in required', signed_in:'Signed in', starting:'Preparing login…', waiting:'Waiting for browser', verifying:'Confirming login…', cancelling:'Stopping login…', cancelled:'Login cancelled', timed_out:'Login timed out', error:'Login needs attention'};
+  const labels = {unknown:'尚未检查登录', checking:'正在检查登录……', missing:'请先安装 Codex', signed_out:'需要登录', signed_in:'已登录', starting:'正在准备登录……', waiting:'等待浏览器授权', verifying:'正在确认登录……', cancelling:'正在停止登录……', cancelled:'登录已取消', timed_out:'登录超时', error:'登录需要处理'};
   function render() {
-    status.textContent = connected ? labels[state.state] || 'Login not checked' : 'Runner disconnected';
+    status.textContent = connected ? labels[state.state] || '尚未检查登录' : '执行器连接已断开';
     status.className = `setup-status ${state.state === 'signed_in' ? 'ok' : 'attention'}`;
-    message.textContent = state.message || 'Use your existing ChatGPT account. Complete authorization in your browser.';
+    message.textContent = messageText(state.message) || '使用你的 ChatGPT 账号，在浏览器中完成授权。';
     login.hidden = state.state === 'signed_in' || state.busy;
     login.disabled = !connected || pending || state.state === 'missing';
     cancel.hidden = !state.busy;
@@ -23,13 +25,13 @@ export function setupOnboarding({request, notify, onEnvironment, onProject, onTa
     link.hidden = !connected || !state.busy || !state.loginUrl;
     if (!link.hidden) link.href = state.loginUrl; else link.removeAttribute('href');
     const toolsReady = report?.git.status === 'ok' && report?.codex.status === 'ok' && report?.storage.status === 'ok';
-    document.querySelector('#setup-tools-state').textContent = report ? toolsReady ? 'Local tools ready' : 'Setup needs attention' : 'Checking local tools…';
-    document.querySelector('#setup-account-state').textContent = state.state === 'signed_in' ? 'Credentials available' : state.busy ? 'Complete browser authorization' : 'Connect your Codex account';
-    document.querySelector('#setup-project-state').textContent = projectCount ? `${projectCount} registered ${projectCount === 1 ? 'project' : 'projects'}` : 'Register a local Git repository';
-    projectButton.textContent = projectCount ? 'Create a task' : 'Add project';
+    document.querySelector('#setup-tools-state').textContent = report ? toolsReady ? '本地工具已就绪' : '运行环境需要处理' : '正在检查本地工具……';
+    document.querySelector('#setup-account-state').textContent = state.state === 'signed_in' ? '本地登录凭据可用' : state.busy ? '请在浏览器中完成授权' : '连接你的 Codex 账号';
+    document.querySelector('#setup-project-state').textContent = projectCount ? `已添加 ${projectCount} 个项目` : '添加本地 Git 仓库';
+    projectButton.textContent = projectCount ? '新建任务' : '添加项目';
     projectButton.disabled = !connected || state.busy;
     panel.dataset.ready = String(Boolean(toolsReady && state.state === 'signed_in' && projectCount));
-    document.querySelector('#setup-title').textContent = panel.dataset.ready === 'true' ? 'Ready for your next task' : 'Get ready to run Codex';
+    document.querySelector('#setup-title').textContent = panel.dataset.ready === 'true' ? '可以开始下一个任务了' : '开始使用 Codex';
   }
   function accept(next) {
     if (next.instanceId === state.instanceId && next.revision < state.revision) return;
@@ -38,7 +40,7 @@ export function setupOnboarding({request, notify, onEnvironment, onProject, onTa
     onBusyChange(Boolean(state.busy));
     render();
     if (previous.busy && state.state === 'signed_in') {
-      notify('Codex login is ready');
+      notify('Codex 登录已就绪');
       onSignedIn();
     }
     if (refreshRequested) scheduleRefresh();
@@ -56,7 +58,7 @@ export function setupOnboarding({request, notify, onEnvironment, onProject, onTa
     try {
       const next = await request(path, {method:'POST'}).then(response => response.json());
       if (current === generation) { lastChecked = Date.now(); accept(next); }
-    } catch (failure) { if (current === generation) error.textContent = failure.message; }
+    } catch (failure) { if (current === generation) error.textContent = messageText(failure.message); }
     finally { pending = false; render(); if (refreshRequested) scheduleRefresh(); }
   }
   login.addEventListener('click', () => { void operation('/api/auth/login'); });

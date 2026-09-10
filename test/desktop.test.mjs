@@ -10,8 +10,8 @@ test("desktop window keeps renderer privileges isolated", () => {
 });
 
 test("tray menu reflects window visibility and exposes explicit quit", () => {
-  assert.equal(trayMenu({ visible: true }).find((item) => item.id === "toggle").label, "Hide Control Plane");
+  assert.equal(trayMenu({ visible: true }).find((item) => item.id === "toggle").label, "隐藏控制台");
   const hidden = trayMenu({ visible: false });
-  assert.equal(hidden.find((item) => item.id === "toggle").label, "Show Control Plane");
+  assert.equal(hidden.find((item) => item.id === "toggle").label, "显示控制台");
   assert.ok(hidden.some((item) => item.id === "quit"));
 });
