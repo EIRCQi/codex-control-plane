@@ -23,7 +23,7 @@ test('concurrent saves preserve the latest complete snapshot; corrupt data is no
 });
 
 // No paid Codex calls: a local executable simulates the CLI protocol and cancellation.
-test('real HTTP/worktree lifecycle, rejection retry, duplicate apply, and cancellation', { skip: process.platform === 'win32', timeout: 25000 }, async (t) => {
+test('real HTTP/worktree lifecycle, rejection retry, duplicate apply, and cancellation', { skip: process.platform === 'win32', timeout: 45000 }, async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ccp-integration-'));
   const repo = path.join(dir, 'repo');
   const bin = path.join(dir, 'bin');
@@ -49,6 +49,8 @@ if (args.at(-1).includes('gated quota')) {
 } else if (args.at(-1).includes('slow')) {
   process.on('SIGTERM', () => {});
   console.log(JSON.stringify({type:'output', message:'ready'}));
+  console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'运行中的部分报告'}}));
+  console.error('running diagnostic');
   setInterval(() => {}, 1000);
 } else {
   if (args.includes('workspace-write')) fs.writeFileSync('README.md', 'approved change\\n');
@@ -168,10 +170,17 @@ if (args.at(-1).includes('gated quota')) {
 
   const slow = await start('slow analysis');
   await until(async () => (await run(slow.id)).logs?.some((log) => log.message === 'ready'));
+  await until(async () => {
+    const saved=JSON.parse(await readFile(path.join(data,'runs.json'),'utf8')).find(entry=>entry.id===slow.id);
+    return saved?.executions?.at(-1)?.durationMs>0 && saved.output.includes('运行中的部分报告');
+  });
   await action(slow.id, 'cancel');
   assert.equal((await action(slow.id, 'retry')).status, 400);
   assert.equal((await request(`/api/runs/${slow.id}`, 'DELETE')).status, 400);
-  await state(slow.id, 'cancelled'); // resistant CLI must be killed within the grace period
+  const cancelled=await state(slow.id, 'cancelled'); // resistant CLI must be killed within the grace period
+  assert.match(cancelled.executions.at(-1).output,/运行中的部分报告/);
+  assert.equal(cancelled.executions.at(-1).status,'cancelled');
+  assert.match(cancelled.executions.at(-1).diagnostics,/running diagnostic/);
   assert.equal((await request(`/api/runs/${slow.id}`, 'DELETE')).status, 200);
 
   // Budget termination has the same escalation path as user cancellation.

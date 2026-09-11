@@ -27,3 +27,17 @@ test('live connection requires a snapshot, reconnects stalled streams and ignore
   second.emit('run',{id:'after-close'});assert.equal(runs.length,1);
   client.reconnect();assert.equal(sources.length,3);
 });
+
+test('heartbeats cannot hide a missing snapshot or malformed stream, and ordinary snapshots do not repeat setup', () => {
+  const sources=[];let clock=0,tick,ready=0;
+  class Source {
+    handlers=new Map();constructor(){sources.push(this);}close(){}
+    addEventListener(type,fn){this.handlers.set(type,fn);}
+    emit(type,value){this.handlers.get(type)?.({data:JSON.stringify(value)});}
+  }
+  const client=createLiveConnection({Source,now:()=>clock,schedule:fn=>{tick=fn;return 1;},unschedule(){},onStatus(){},onSnapshot(){},onReady:()=>ready++});
+  clock=30000;sources[0].emit('heartbeat',{});clock=45000;tick();assert.equal(sources.length,2);
+  const active=sources[1];active.emit('snapshot',[]);active.emit('snapshot',[]);assert.equal(ready,1);
+  active.emit('snapshot',{invalid:true});active.emit('heartbeat',{});tick();assert.equal(sources.length,3);
+  sources[2].emit('snapshot',[]);assert.equal(ready,2);client.close();
+});

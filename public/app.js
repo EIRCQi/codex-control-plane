@@ -4,11 +4,13 @@ import { captureView, restoreView, createRunList, updateMarkup } from "./live-vi
 import { createEventViewer } from "./event-viewer.js";
 import { setupOnboarding } from './onboarding.js';
 import { setupEnvironment } from "./environment.js";
-import { agentOutput } from "./run-output.js";
 import { notificationForTransition, notificationKinds } from "./notifications.js";
 import { messageText, phaseLabel, eventLabel } from './locale.js';
 import { normalizeFilters, selectRuns, taskTitle, draftFromRun, usageKey, runDownload, downloadFile } from './run-view.js';
 import { createLiveConnection } from './connection.js';
+import { preferRun, executionDuration, formatDuration, runningMessage } from './run-state.js';
+import { setupExecutionView } from './execution-view.js';
+import { setupChangeCheck } from './change-check.js';
 
 const runsEl = document.querySelector("#runs");
 const emptyEl = document.querySelector("#empty");
@@ -16,6 +18,9 @@ const dialog = document.querySelector("#task-dialog");
 const runDialog = document.querySelector("#run-dialog");
 let currentRuns = [];
 let runnerConnected = false;
+let runnerInstance = null;
+let clockNow = Date.now();
+const deletedRuns = new Set();
 let loginBusy = false;
 let onboarding;
 let visibleLimit = 20;
@@ -39,6 +44,8 @@ document.querySelector('#state-filter').value = savedFilters.state;
 document.querySelector('#show-archived').checked = savedFilters.archived;
 document.querySelector('#sort-runs').value = savedFilters.sort;
 const eventViewer = createEventViewer(document.querySelector('#event-viewer'), {isActive: () => runDialog.open && detailTab === 'events'});
+const executionView = setupExecutionView(document.querySelector('#detail-output'));
+const changeCheck = setupChangeCheck({root:document.querySelector('#change-check')});
 const notificationStorageKey = "codex-control-plane.notifications.v1";
 const notificationPreferenceKey = "codex-control-plane.notification-preferences.v1";
 let notifications = readLocal(notificationStorageKey, []);
@@ -60,7 +67,6 @@ const statusLabel = {
 
 const escapeHtml = (value = "") => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 const formatTokens = (value = 0) => Intl.NumberFormat("zh-CN", { notation: value >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
-const formatDuration = (ms = 0) => ms < 60000 ? `${Math.round(ms / 1000)} 秒` : `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒`;
 const terminalStates = new Set(["completed", "failed", "cancelled", "discarded", "budget_exceeded"]);
 
 function readLocal(key, fallback) {
@@ -210,8 +216,9 @@ onboarding = setupOnboarding({
 });
 function acceptRun(incoming) {
   const current = currentRuns.find((run) => run.id === incoming.id);
-  // The SSE stream may already have delivered a later state than the HTTP reply.
-  const latest = current?.updatedAt > incoming.updatedAt ? current : incoming;
+  if (deletedRuns.has(incoming.id)) return null;
+  const latest = preferRun(current, incoming, runnerInstance);
+  if (!latest) return null;
   render([latest, ...currentRuns.filter((run) => run.id !== latest.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   return latest;
 }
@@ -317,20 +324,15 @@ function renderRunDetail(run, preserve = true) {
   const title = document.querySelector('#detail-title');
   if (title.textContent !== taskTitle(run)) title.textContent = taskTitle(run);
   updateMarkup(document.querySelector('#detail-overview-body'), `
-    <p class="next-step">${escapeHtml(nextSteps[run.state] || '')}</p>
+    <p class="next-step">${escapeHtml(nextSteps[run.state] || '')}</p><p class="run-activity" data-run-activity="${escapeHtml(run.id)}">${escapeHtml(runningMessage(run, clockNow))}</p>
     <div class="detail-meta"><div><span>状态</span><strong class="status ${run.state}">${statusLabel[run.state]}</strong></div><div><span>项目</span><strong>${escapeHtml(projects.find((project) => project.id === run.projectId)?.name || "未登记")}</strong></div><div><span>仓库</span><strong title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</strong></div><div><span>任务模式</span><strong>${run.mode === 'review' ? '只读审查' : '实施修改'}</strong></div></div>
-    <div class="detail-usage"><div><span>Token 总量</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>输入 / 缓存</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>输出</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>运行时长</span><strong>${formatDuration(usage.durationMs)}</strong></div><div><span>模型</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
+    <div class="detail-usage"><div><span>Token 总量</span><strong>${formatTokens(usage.totalTokens)}</strong></div><div><span>输入 / 缓存</span><strong>${formatTokens(usage.inputTokens)} / ${formatTokens(usage.cachedInputTokens)}</strong></div><div><span>输出</span><strong>${formatTokens(usage.outputTokens)}</strong></div><div><span>累计执行时长</span><strong data-run-duration="${escapeHtml(run.id)}">${formatDuration(executionDuration(run, clockNow))}</strong></div><div><span>模型</span><strong>${escapeHtml(usage.model || "—")}</strong></div></div>
     ${run.error ? `<p class="error">${escapeHtml(messageText(run.error))}</p>` : ''}
     <p class="detail-created">创建时间：${new Date(run.createdAt).toLocaleString('zh-CN')}</p>
     <details data-view="instructions"><summary>完整任务指令</summary><pre>${escapeHtml(run.prompt)}</pre></details>`);
-  if (!previousRun || previousRun.output !== run.output || previousRun.mode !== run.mode) {
-    document.querySelector('#detail-output-title').textContent = run.mode === 'review' ? '审查报告' : '执行结果';
-    document.querySelector('[data-copy="output"]').disabled = !run.output;
-    document.querySelector('[data-download="output"]').disabled = !run.output;
-    updateMarkup(document.querySelector('#detail-output-body'), run.output
-      ? `<pre data-view="report">${escapeHtml(agentOutput(run.output))}</pre>`
-      : '<p class="tab-empty">当前阶段完成后会显示报告，实时进度请查看“事件”。</p>');
-  }
+  document.querySelector('#detail-output-title').textContent = run.mode === 'review' ? '审查报告' : '执行结果';
+  executionView.update(run);
+  changeCheck.update(run, runnerConnected);
   updateMarkup(document.querySelector('#detail-timeline'), run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString('zh-CN')}</time><div><strong title="${escapeHtml(event.type)}">${escapeHtml(eventLabel(event.type))}</strong><p>${escapeHtml(messageText(event.message))}</p></div></article>`).join(''));
   eventViewer.update(run);
   if (!previousRun || previousRun.diff !== run.diff || previousRun.diffStat !== run.diffStat || previousRun.mode !== run.mode) {
@@ -348,6 +350,7 @@ function renderRunDetail(run, preserve = true) {
   updatePendingButtons();
 }
 runDialog.addEventListener("close", () => {
+  changeCheck.update(null, runnerConnected);
   detailRunId = null; renderedDetailRun = null; detailTabViews.clear();
   // A live update may have replaced the card that originally opened the dialog.
   if (!document.activeElement || document.activeElement === document.body) document.querySelector('#run-search').focus({preventScroll:true});
@@ -366,7 +369,8 @@ function runCard(run) {
     <div class="run-head"><div><span class="status ${run.state}">${statusLabel[run.state]}</span><h3 title="${escapeHtml(taskTitle(run))}">${escapeHtml(taskTitle(run).slice(0, 240))}</h3></div>
     <div class="run-controls"><button class="${approval ? 'primary' : 'secondary'} detail-run" data-id="${id}" data-open-tab="${tab}">${label}</button>${active ? `<button class="secondary cancel-run" data-id="${id}">取消任务</button>` : ''}${['failed','cancelled','budget_exceeded'].includes(run.state) ? `<button class="secondary retry-run" data-id="${id}">重试任务</button>` : ''}</div></div>
     <p class="repo"><strong>${escapeHtml(project?.name || '未登记项目')}</strong><span title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</span></p>
-    <div class="run-summary"><span>${run.mode === 'review' ? '只读审查' : '审批保护'} · ${escapeHtml(phase)}</span><span>${formatTokens(run.usage?.totalTokens)} Token</span><span>${formatDuration(run.usage?.durationMs)}</span><time>${new Date(run.createdAt).toLocaleString('zh-CN')}</time></div>
+    <div class="run-summary"><span>${run.mode === 'review' ? '只读审查' : '审批保护'} · ${escapeHtml(phase)}</span><span>${formatTokens(run.usage?.totalTokens)} Token</span><span data-run-duration="${id}">${formatDuration(executionDuration(run, clockNow))}</span><time>${new Date(run.createdAt).toLocaleString('zh-CN')}</time></div>
+    <p class="run-activity" data-run-activity="${id}">${escapeHtml(runningMessage(run, clockNow))}</p>
     ${run.error ? `<p class="error">${escapeHtml(messageText(run.error))}</p>` : ''}
     ${run.state === 'budget_exceeded' ? `<p class="budget-alert">${escapeHtml(messageText(run.events.at(-1)?.message || '已达到预算上限'))}</p>` : ''}
     ${approval ? `<p class="card-guidance">${run.state === 'awaiting_merge' ? '变更保留在隔离工作区，请打开详情检查补丁，再应用或丢弃。' : '分析已完成，请打开详情阅读方案，再决定是否批准写入。'}</p>` : ''}
@@ -378,12 +382,12 @@ const updateRunList = createRunList(runsEl, runCard);
 async function handleRunClick(event) {
   const download = event.target.closest('button[data-download]');
   if (download && !download.disabled && renderedDetailRun) {
-    downloadFile(runDownload(renderedDetailRun, download.dataset.download));
+    downloadFile(runDownload(renderedDetailRun, download.dataset.download, {output:executionView.report(), executionSeq:executionView.sequence()}));
     notify('已发起文件下载'); return;
   }
   const copy = event.target.closest('button[data-copy]');
   if (copy && runDialog.contains(copy)) {
-    const text = copy.dataset.copy === 'diff' ? renderedDetailRun?.diff : agentOutput(renderedDetailRun?.output || '');
+    const text = copy.dataset.copy === 'diff' ? renderedDetailRun?.diff : executionView.report();
     try { await navigator.clipboard.writeText(text || ''); notify(copy.dataset.copy === 'diff' ? '已复制补丁' : '已复制结果'); }
     catch { notify('无法访问剪贴板，请选中文本后手动复制。',{kind:'error'}); }
     return;
@@ -408,7 +412,7 @@ async function handleRunClick(event) {
     if (pendingActions.has(button.dataset.id) || !window.confirm('确认删除这条任务历史记录？原仓库文件会保留。')) return;
     const id = button.dataset.id;
     pendingActions.set(id,'delete'); updatePendingButtons();
-    try { await checkedFetch(`/api/runs/${id}`,{method:'DELETE'}); render(currentRuns.filter((run) => run.id !== id)); notify('历史记录已删除'); }
+    try { await checkedFetch(`/api/runs/${id}`,{method:'DELETE'}); deletedRuns.add(id); render(currentRuns.filter((run) => run.id !== id)); notify('历史记录已删除'); }
     finally { pendingActions.delete(id); updatePendingButtons(); }
   } else await action(button.dataset.id,operation);
 }
@@ -451,7 +455,25 @@ function render(runs) {
     else if (selected !== renderedDetailRun) renderRunDetail(selected);
   }
   updatePendingButtons();
+  updateClocks();
 }
+
+function updateClocks() {
+  const byId = new Map(currentRuns.map(run => [run.id, run]));
+  document.querySelectorAll('[data-run-duration]').forEach(node => {
+    const run = byId.get(node.dataset.runDuration);
+    if (run) node.textContent = formatDuration(executionDuration(run, clockNow));
+  });
+  document.querySelectorAll('[data-run-activity]').forEach(node => {
+    const run = byId.get(node.dataset.runActivity);
+    const text = run ? runningMessage(run, clockNow) : '';
+    node.hidden = !text; if (node.textContent !== text) node.textContent = text;
+  });
+}
+const clockTimer = setInterval(() => {
+  if (!runnerConnected || document.visibilityState === 'hidden') return;
+  clockNow = Date.now(); updateClocks();
+}, 1000);
 
 async function loadSettings() {
   const generation = settingsGeneration;
@@ -665,6 +687,8 @@ function connectionStatus(connected) {
   document.querySelector("#new-task").disabled = !connected || loginBusy;
   document.querySelector('.live').classList.toggle('disconnected', !connected);
   document.querySelector('#live-status').textContent = connected ? '实时更新' : '连接中断';
+  changeCheck.update(runDialog.open ? renderedDetailRun : null, connected);
+  if (connected) { clockNow = Date.now(); updateClocks(); }
 }
 
 function showUpdate(registration) {
@@ -694,19 +718,25 @@ const connection = createLiveConnection({
   onAuth: state => onboarding.accept(state),
   onCatalog: acceptCatalog,
   onSettings: acceptSettings,
+  onSession(session) {
+    if (runnerInstance !== session.runnerId) deletedRuns.clear();
+    runnerInstance = session.runnerId;
+  },
   onReady: () => { void Promise.all([loadSettings(), loadCatalog(), environment.refresh()]).catch(() => {}); },
   onSnapshot(snapshot) {
+    const present = new Set(snapshot.map(run => run.id));
+    for (const run of currentRuns) if (!present.has(run.id)) deletedRuns.add(run.id);
     for (const run of snapshot) addNotification(notificationForTransition(currentRuns.find(item => item.id === run.id), run));
     render(snapshot.sort((a,b) => b.createdAt.localeCompare(a.createdAt)));
   },
   onRun(changed) {
     const previous = currentRuns.find(run => run.id === changed.id);
-    acceptRun(changed);
-    addNotification(notificationForTransition(previous, changed));
+    const latest = acceptRun(changed);
+    if (latest === changed) addNotification(notificationForTransition(previous, changed));
   },
 });
 document.querySelector('#reconnect-runner').addEventListener('click', () => connection.reconnect());
-window.addEventListener('pagehide', () => connection.close());
+window.addEventListener('pagehide', event => { connection.close(); if (!event.persisted) clearInterval(clockTimer); });
 window.addEventListener('pageshow', event => { if (event.persisted) connection.reconnect(); });
 
 document.querySelector('#approvals-nav').addEventListener('click', () => filterBy('approvals'));

@@ -72,6 +72,9 @@ const messages = new Map([
   ['Only an active run can be cancelled', '只能取消排队中或执行中的任务。'],
   ['Only a failed, cancelled or budget-limited run can be retried', '只能重试失败、已取消或因预算停止的任务。'],
   ['Task queued', '任务已加入队列'],
+  ['Codex turn failed', 'Codex 执行轮次失败，请查看诊断信息。'],
+  ['An oversized Codex event was skipped; later events will still be processed', '已跳过一条超过大小限制的事件，后续事件会继续处理。'],
+  ['An oversized diagnostic line was truncated', '一条过长的诊断信息已截断。'],
   ['Analysis complete; write access requested', '分析已完成，等待批准写入隔离工作区'],
   ['Write access approved', '已批准写入隔离工作区'],
   ['Write access rejected', '已拒绝写入请求'],
@@ -124,5 +127,6 @@ const events = new Map([
   ['thread.started','会话开始'], ['turn.started','执行轮次开始'], ['turn.completed','执行轮次完成'], ['turn.failed','执行轮次失败'],
   ['item.started','操作开始'], ['item.updated','操作更新'], ['item.completed','操作完成'], ['response.completed','回复完成'],
   ['error','错误'], ['output','输出'],
+  ['stderr','诊断信息'], ['output.truncated','输出截断'],
 ]);
 export const eventLabel = type => events.get(type) || type;

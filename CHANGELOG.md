@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 — 2026-09-11
+
+- Added execution records for each CLI attempt: phase, start/end/checkpoint time, outcome, exit status, report and bounded stderr. Failed, cancelled and budget-limited attempts retain completed agent messages already received. New attempts do not reuse stale output; earlier and legacy reports remain selectable. Copy/download uses the selected execution.
+- Checkpoint active records every five seconds and recover unfinished records as interrupted on startup, counting only time observed at the last save. Keep the latest 20 execution records, at most 262,144 UTF-16 code units of each new report and the last 32,768 of stderr, with explicit truncation indicators. Historical usage totals are retained when old execution entries expire. Existing task-list/event retention is unchanged.
+- Update live execution clocks without re-rendering reports and provide stopping/quiet-output guidance. Increment run revisions and identify Runner instances so delayed HTTP/SSE replies cannot roll back newer observed state, including equal timestamps and restarts.
+- Added a read-only, repository-locked change-check endpoint and an optional approval-panel check. It verifies the baseline and runs `git apply --check --index`; applying still repeats validation. UI checks have a deadline, prevent duplicates and ignore results for an obsolete selection/revision.
+- Bound unterminated/oversized CLI lines and tolerate scalar JSON events without crashing the Runner. Preserve subsequent reports and usage. Show bounded stderr diagnostics and recognize an unresolved failed-turn event on process completion.
+- Recover streams that deliver heartbeats without a snapshot, or malformed snapshots; ordinary snapshots no longer repeat setup requests. Added regression coverage for recovery, partial reports, deadlines, legacy output selection, stale revisions and real Git checks.
+
+All 98 local Node tests pass, along with syntax checks for 35 scripts, HTML structure/ARIA references, static selectors and module/cache assets. No new dependencies, manual data migration or installer publication. Validation uses local CLI fixtures, not paid model calls. Browser layout, native Mac behavior and real-account execution remain outside this environment's verification.
+
 ## 0.6.0 — 2026-09-10
 
 - Replaced expanded run cards with summaries and direct links to the relevant approval/progress tab. Full prompts, reports, events and patches remain in details. Unchanged summary markup retains DOM nodes; log-only updates skip usage-table rendering, and usage rows load in batches of 30 without changing totals.

@@ -30,5 +30,8 @@ jobs:
       - run: node --check public/run-view.js
       - run: node --check public/connection.js
       - run: node --check public/environment.js
+      - run: node --check public/run-state.js
+      - run: node --check public/execution-view.js
+      - run: node --check public/change-check.js
       - run: node --check scripts/launch.mjs
       - run: node --check scripts/status.mjs

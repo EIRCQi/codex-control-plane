@@ -47,10 +47,10 @@ export function usageKey(runs) {
   return JSON.stringify(runs.map(run => [run.id, taskTitle(run), run.usage]));
 }
 
-export function runDownload(run, type) {
+export function runDownload(run, type, {output = agentOutput(run.output || ''), executionSeq = null} = {}) {
   const id = String(run.id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
   if (type === 'diff') return { name: `codex-${id}.patch`, type: 'text/plain;charset=utf-8', text: run.diff || '' };
-  return { name: `codex-${id}.md`, type: 'text/markdown;charset=utf-8', text: agentOutput(run.output || '') };
+  return { name: `codex-${id}${Number.isSafeInteger(executionSeq) ? `-execution-${executionSeq}` : ''}.md`, type: 'text/markdown;charset=utf-8', text: output };
 }
 
 export function downloadFile(file, doc = document) {

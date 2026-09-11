@@ -189,7 +189,11 @@
           <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0"><div id="detail-overview-body"></div></section>
           <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
             <div class="content-toolbar"><h3 id="detail-output-title">执行结果</h3><div class="content-actions"><button type="button" class="secondary" data-copy="output" disabled>复制结果</button><button type="button" class="secondary" data-download="output" disabled>下载报告</button></div></div>
-            <div id="detail-output-body"></div>
+            <label class="execution-picker">执行记录<select data-execution-select aria-label="选择一次执行的输出"></select></label>
+            <p data-execution-note class="execution-note" role="status"></p>
+            <div id="detail-output-body"><pre data-execution-report data-view="report" hidden></pre><p class="tab-empty" data-execution-empty>暂无报告。</p></div>
+            <details data-execution-diagnostics class="execution-diagnostics" hidden><summary>诊断信息</summary><p data-diagnostic-note></p><pre data-diagnostic-body data-view="diagnostics"></pre></details>
+            <p class="execution-retention">保留最近 20 次执行记录。切换记录后，复制和下载对应当前选择；重试用量仍累计。</p>
           </section>
           <section id="detail-events" data-tab-panel="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
             <details class="workflow-history"><summary>工作流时间线</summary><div id="detail-timeline" class="timeline"></div></details>
@@ -203,6 +207,7 @@
           </section>
           <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0" hidden>
             <div class="content-toolbar"><h3>代码变更</h3><div class="content-actions"><button type="button" class="secondary" data-copy="diff" disabled>复制补丁</button><button type="button" class="secondary" data-download="diff" disabled>下载补丁</button></div></div>
+            <div id="change-check" class="change-check" hidden><button type="button" class="secondary" data-check-changes>检查是否可应用</button><p data-check-status role="status"></p></div>
             <div id="detail-diff-body"></div>
           </section>
         </div>

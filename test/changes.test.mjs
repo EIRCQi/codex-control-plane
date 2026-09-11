@@ -36,6 +36,7 @@ if (process.argv.includes('workspace-write')) {
     fs.writeFileSync('failed-artifact.txt', 'must be removed');
     fs.writeFileSync('README.md', 'failed attempt');
     git('add', '.'); git('commit', '-qm', 'Failed attempt');
+    console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'失败前的部分报告'}}));
     console.error('simulated failure'); process.exit(1);
   }
   if (task.includes('retry') && (fs.existsSync('failed-artifact.txt') || git('rev-parse', 'HEAD') !== process.env.CCP_TEST_BASE)) {
@@ -54,6 +55,7 @@ if (process.argv.includes('workspace-write')) {
 }
 // Split a multi-byte character across pipe chunks on purpose.
 const output = Buffer.from(JSON.stringify({type:'item.completed', item:{type:'agent_message', text:'检查完成 😀'}}) + '\\n');
+if (task.includes('unexpected event')) { console.log('null');console.log('x'.repeat(1024*1024+1)); }
 const split = output.indexOf(Buffer.from('检')) + 1;
 process.stdout.write(output.subarray(0, split));
 setTimeout(() => {
@@ -104,6 +106,16 @@ setTimeout(() => {
       assert.equal(await readFile(path.join(repo,'README.md'),'utf8'),'baseline\n');
       assert.match(changed.output,/检查完成 😀/);
       assert.doesNotMatch(changed.diff,/\uFFFD/);
+      const check=await request(`/api/runs/${run.id}/change-check`);
+      assert.equal(check.status,200);assert.equal(check.body.canApply,true);assert.equal(check.body.revision,changed.revision);
+      assert.equal(git('status','--porcelain'),'');
+      if(mode==='staged') {
+        await writeFile(path.join(repo,'README.md'),'user change\n');
+        const conflict=await request(`/api/runs/${run.id}/change-check`);
+        assert.equal(conflict.body.canApply,false);assert.match(conflict.body.error,/Original repository changed/);
+        assert.equal(await readFile(path.join(repo,'README.md'),'utf8'),'user change\n');
+        await writeFile(path.join(repo,'README.md'),'baseline\n');
+      }
       assert.equal((await action(run.id,'apply')).status,202);
       assert.equal(await readFile(path.join(repo,'README.md'),'utf8'), '已批准的改动 😀\n' + (mode==='mixed' ? 'final working-tree change\n' : ''));
       if(mode==='mixed') {
@@ -119,11 +131,14 @@ setTimeout(() => {
   await t.test('failed agent commits are removed on retry', async () => {
     const run=await create('retry');
     await action(run.id,'approve');
-    assert.equal((await settled(run.id)).state,'failed');
+    const failed=await settled(run.id);
+    assert.equal(failed.state,'failed');assert.match(failed.output,/失败前的部分报告/);
+    assert.equal(failed.executions.at(-1).status,'failed');assert.match(failed.executions.at(-1).diagnostics,/simulated failure/);
     assert.equal((await action(run.id,'retry')).status,202);
     const retried=await settled(run.id);
     assert.equal(retried.state,'awaiting_merge',retried.error);
     assert.doesNotMatch(retried.diff,/failed-artifact/);
+    assert.ok(retried.executions.some(entry=>entry.status==='failed' && entry.output.includes('失败前的部分报告')));
     await action(run.id,'discard');
   });
   await t.test('a missing temporary worktree can be recreated for retry without changing the baseline', async () => {
@@ -157,6 +172,12 @@ setTimeout(() => {
     assert.equal(response.status,202);
     assert.equal(response.body.prompt,prompt);
     assert.equal((await settled(response.body.id)).state,'completed');
+  });
+  await t.test('unexpected and oversized events do not stop the Runner or discard later reports', async () => {
+    const response=await request('/api/runs','POST',{repository:repo,prompt:'unexpected event',mode:'review'});
+    assert.equal(response.status,202);const run=await settled(response.body.id);
+    assert.equal(run.state,'completed',run.error);assert.match(run.output,/检查完成 😀/);
+    assert.ok(run.logs.some(log=>log.type==='output.truncated'));assert.equal(run.usage.totalTokens,15);
   });
   await t.test('retry refuses a changed source baseline', async () => {
     await rm(path.join(dir,'attempt'), {force:true});

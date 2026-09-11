@@ -5,8 +5,8 @@ import { access, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition } from "./lib/workflow.mjs";
-import { addDuration, aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
+import { aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson } from "./lib/storage.mjs";
 import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
@@ -15,6 +15,7 @@ import { startupErrorMessage } from "./lib/startup.mjs";
 import { createAuthManager } from "./lib/auth.mjs";
 import { applicationId } from "./lib/launcher.mjs";
 import { defaultSettings, validateSettings, budgetReason } from './lib/budget.mjs';
+import { beginExecution, checkpointExecution, appendReport, appendDiagnostic, finishExecution, recoverExecutions, createLineReader, parseCodexLine } from './lib/execution.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -25,6 +26,8 @@ const projectsFile = path.join(dataDir, "projects.json");
 const runtimeFile = path.join(dataDir, "runtime.json");
 const appVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 const runnerEnv = runtimeEnvironment();
+const runnerId = randomUUID();
+let checkpointTimer;
 let runtimeSettings = { ...runtimeDefaults };
 let diagnosticsPromise = null;
 const templatesFile = path.join(dataDir, "templates.json");
@@ -64,6 +67,7 @@ async function initialize() {
       run.events ||= [];
       run.retries ||= 0;
       run.executionSeq ||= 0;
+      run.runnerId = runnerId;
       run.usage ||= emptyUsage();
       run.usageSeen ||= [];
       run.cancelRequested = false;
@@ -71,11 +75,14 @@ async function initialize() {
       run.archived ||= false;
       run.queuedAction ||= run.phase === "implementation" ? "implementation" : "analysis";
       run.starting = false;
+      recoverExecutions(run);
       if (run.state === "running") {
         run.state = "failed";
         run.error = "Control plane restarted while this phase was running";
-        run.events.push({ type: "run.failed", message: run.error, at: new Date().toISOString() });
+        run.updatedAt = new Date().toISOString();
+        run.events.push({ type: "run.failed", message: run.error, at: run.updatedAt });
       }
+      touchRun(run, run.updatedAt);
       runs.set(run.id, run);
     }
   }
@@ -90,6 +97,7 @@ const runPublisher = createRunPublisher(writeRun);
 const emitRun = (run) => runPublisher.immediate(run);
 
 async function persist(run) {
+  if (run) touchRun(run);
   await saveJson(dataFile, [...runs.values()]);
   if (run) emitRun(run);
   else for (const client of eventClients) client.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
@@ -223,53 +231,54 @@ async function executeCodex(run, sandbox, prompt) {
   if (run.cancelRequested || stopping) throw new Error("Run cancelled");
   if (enforceBudget(run)) throw new Error('Run cancelled');
   if (run.mode === "review" && sandbox !== "read-only") throw new Error("Read-only reviews cannot request write access");
+  const entry = beginExecution(run);
+  run.lastEventAt = null;
+  try { await persist(run); }
+  catch (error) { finishExecution(run, entry, 'failed', {error:error.message}); throw error; }
+  if (run.cancelRequested || stopping) {
+    finishExecution(run, entry, run.budgetExceeded ? 'budget_exceeded' : 'cancelled');
+    throw new Error('Run cancelled');
+  }
   return new Promise((resolve, reject) => {
-    const executionSeq = ++run.executionSeq;
-    const startedAt = Date.now();
-    const child = spawn(executable, ["exec", "--sandbox", sandbox, "--json", prompt], {
-      cwd: run.worktree,
-      env: runnerEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child;
+    try {
+      child = spawn(executable, ["exec", "--sandbox", sandbox, "--json", prompt], {
+        cwd: run.worktree, env: runnerEnv, windowsHide:true, stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finishExecution(run, entry, 'failed', {error:error.message}); reject(error); return;
+    }
     processes.set(run.id, child);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    let stdout = "";
-    let buffer = "";
-    let stderr = "";
-    const recordLine = (line) => {
-      if (!line.trim()) return;
-      let event;
-      try { event = JSON.parse(line); } catch { event = { type: "output", message: line }; }
-      const usageChanged = recordUsage(run, event, executionSeq);
-      if (usageChanged) enforceBudget(run);
-      const message = event.message || event.text || event.item?.text || event.item?.content || event.type || "Codex event";
-      const display = typeof message === "string" ? message : JSON.stringify(message);
-      run.logs.push({ type: event.type || "output", message: display, at: new Date().toISOString() });
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    let spawnError = null, protocolError = null;
+    const log = (type, message) => {
+      run.lastEventAt = new Date().toISOString();
+      run.logs.push({type, message:String(message).slice(0, 16384), at:run.lastEventAt, executionSeq:entry.seq});
       if (run.logs.length > 500) run.logs.splice(0, run.logs.length - 500);
-      run.updatedAt = new Date().toISOString();
-      runPublisher.schedule(run);
+      touchRun(run); runPublisher.schedule(run);
     };
-    child.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout += text;
-      buffer += text;
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      lines.forEach(recordLine);
-    });
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", (error) => {
-      processes.delete(run.id);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      processes.delete(run.id);
-      addDuration(run, Date.now() - startedAt);
-      recordLine(buffer);
-      if (run.cancelRequested) reject(new Error("Run cancelled"));
-      else if (code === 0) resolve(stdout.trim());
-      else reject(new Error(stderr.trim() || `Codex exited with code ${code}`));
+    const output = createLineReader(line => {
+      const {event, plain} = parseCodexLine(line);
+      if (recordUsage(run, event, entry.seq)) enforceBudget(run);
+      if (plain) appendReport(run, entry, line);
+      else if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') appendReport(run, entry, event.item.text);
+      if (event.type === 'turn.failed') protocolError = event.error?.message || 'Codex turn failed';
+      if (event.type === 'turn.completed') protocolError = null;
+      const message = event.message || event.text || event.item?.text || event.item?.content || event.error?.message || event.type || 'Codex event';
+      log(typeof event.type === 'string' ? event.type : 'output', typeof message === 'string' ? message : JSON.stringify(message));
+    }, {onOverflow:() => log('output.truncated', 'An oversized Codex event was skipped; later events will still be processed')});
+    const diagnostics = createLineReader(line => log('stderr', line), {limit:32768, onOverflow:() => log('output.truncated','An oversized diagnostic line was truncated')});
+    child.stdout.on('data', chunk => output.write(chunk));
+    child.stderr.on('data', chunk => { appendDiagnostic(entry, chunk); diagnostics.write(chunk); });
+    child.on('error', error => { spawnError = error; });
+    child.on('close', code => {
+      processes.delete(run.id); output.end(); diagnostics.end();
+      const error = spawnError?.message || protocolError || (code === 0 ? null : entry.diagnostics.trim() || `Codex exited with code ${code}`);
+      const status = run.budgetExceeded ? 'budget_exceeded' : run.cancelRequested ? 'cancelled' : error ? 'failed' : 'completed';
+      finishExecution(run, entry, status, {exitCode:code, error});
+      if (run.cancelRequested) reject(new Error('Run cancelled'));
+      else if (error) reject(new Error(error));
+      else resolve(entry.output);
     });
   });
 }
@@ -281,7 +290,7 @@ async function analyze(run) {
     transition(run, "running", run.mode === "review" ? "Read-only review started" : "Read-only analysis started");
     await persist(run);
     if (run.cancelRequested || stopping) throw new Error("Run cancelled");
-    run.output = await executeCodex(
+    await executeCodex(
       run,
       "read-only",
       run.mode === "review" ? `${run.prompt}\n\nReview only. Do not modify files. Report concrete findings with severity, file references and suggested next steps.` : `${run.prompt}\n\nAnalyze the repository and propose a concrete implementation plan. Do not modify files. End with a concise list of files you expect to change.`,
@@ -303,11 +312,11 @@ async function implement(run) {
     transition(run, "running", "Approved implementation started");
     await persist(run);
     if (run.cancelRequested || stopping) throw new Error("Run cancelled");
-    run.output += `\n\n--- Implementation ---\n${await executeCodex(
+    await executeCodex(
       run,
       "workspace-write",
       `${run.prompt}\n\nImplement the requested change. Work only inside this repository. Run relevant tests and summarize the changes.`,
-    )}`;
+    );
     requireBaseline(run);
     await git(run.worktree, ["add", "-N", "."]);
     const diffOptions = ["--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/"];
@@ -338,6 +347,17 @@ async function applyChanges(run) {
   try { await cleanupWorktree(run); }
   catch (error) { run.error = `Changes applied; worktree cleanup failed: ${error.message}`; }
   await persist(run);
+}
+
+async function checkChanges(run) {
+  const result = {runId:run.id, revision:run.revision, checkedAt:new Date().toISOString(), canApply:false};
+  try {
+    if (run.state !== 'awaiting_merge') throw new Error('Run is not awaiting change approval');
+    if (run.starting) throw new Error('Run is still active or stopping; try again shortly');
+    await verifyRepositoryBaseline(run);
+    await git(run.repository, ['apply', '--check', '--index', '-'], run.diff);
+    return {...result, canApply:true};
+  } catch (error) { return {...result, error:error.message}; }
 }
 
 function drainQueue() {
@@ -442,6 +462,7 @@ async function api(req, res, url) {
     });
     res.write("retry: 1500\n\n");
     eventClients.add(res);
+    res.write(`event: session\ndata: ${JSON.stringify({runnerId})}\n\n`);
     res.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
     res.write(`event: auth\ndata: ${JSON.stringify(auth.snapshot())}\n\n`);
     const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15000);
@@ -452,6 +473,11 @@ async function api(req, res, url) {
     return send(res, 200, [...runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   }
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+  const checkMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/change-check$/);
+  if (req.method === 'GET' && checkMatch) {
+    const run = runs.get(checkMatch[1]);
+    return run ? send(res, 200, await checkChanges(run)) : send(res, 404, {error:'Run not found'});
+  }
   if (req.method === "GET" && runMatch) {
     const run = runs.get(runMatch[1]);
     return run ? send(res, 200, run) : send(res, 404, { error: "Run not found" });
@@ -537,6 +563,7 @@ async function api(req, res, url) {
       throw new Error(`Repository token quota reached (${used.toLocaleString()} / ${settings.maxTokensPerRepository.toLocaleString()})`);
     }
     const run = createRun({ id: randomUUID(), repository, prompt, task: body.prompt.trim(), templatePrompt: template?.prompt || null, mode, projectId: project?.id, templateId: template?.id });
+    run.runnerId = runnerId;
     runs.set(run.id, run);
     if (project) {
       project.lastUsedAt = new Date().toISOString();
@@ -605,7 +632,7 @@ export const controlServer = createServer(async (req, res) => {
       const id = url.pathname.match(/^\/api\/runs\/([^/]+)/)?.[1];
       const run = runs.get(id);
       const mutating = !["GET", "HEAD"].includes(req.method);
-      const key = mutating ? (run ? `repo:${run.repository}` : url.pathname) : null;
+      const key = mutating || (run && url.pathname.endsWith('/change-check')) ? (run ? `repo:${run.repository}` : url.pathname) : null;
       const needsCredentials = url.pathname === '/api/runs' || url.pathname === '/api/runtime' || /\/(approve|retry)$/.test(url.pathname);
       if (mutating && needsCredentials && auth.isLoggingIn()) return send(res, 409, {error:'Finish or cancel Codex login before changing runtime settings or starting a task.'});
       if (key && ((key === '/api/auth/login' && actionLocks.size) || (actionLocks.has('/api/auth/login') && !url.pathname.startsWith('/api/auth/')))) return send(res, 409, {error:'Another operation is in progress; try again shortly.'});
@@ -638,6 +665,13 @@ export const serverReady = (async () => {
     await initialize();
     await persist();
     ready = true;
+    checkpointTimer = setInterval(() => {
+      if (stopping) return;
+      const active = [...runs.values()].filter(run => run.executions?.at(-1)?.status === 'running');
+      if (!active.length) return;
+      for (const run of active) { checkpointExecution(run.executions.at(-1)); touchRun(run); }
+      void saveJson(dataFile, [...runs.values()]).then(() => active.forEach(emitRun)).catch(error => console.error(error));
+    }, 5000);
     drainQueue();
     const actualPort = controlServer.address().port;
     const url = `http://127.0.0.1:${actualPort}`;
@@ -650,6 +684,7 @@ let shutdownPromise;
 export function shutdown() {
   if (shutdownPromise) return shutdownPromise;
   stopping = true;
+  clearInterval(checkpointTimer);
   shutdownPromise = (async () => {
     controlServer.close();
     await auth.shutdown();

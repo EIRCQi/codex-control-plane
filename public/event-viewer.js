@@ -1,4 +1,4 @@
-import { eventLabel } from './locale.js';
+import { eventLabel, messageText } from './locale.js';
 
 const logKey = (log) => JSON.stringify([log.at, log.type, log.message]);
 
@@ -77,7 +77,7 @@ export function createEventViewer(root, {isActive}) {
         node = doc.createElement('div');
         const time = doc.createElement('time'), type = doc.createElement('b'), message = doc.createElement('span');
         time.textContent = new Date(log.at).toLocaleTimeString('zh-CN'); time.dateTime = log.at;
-        type.textContent = eventLabel(log.type); type.title = log.type; message.textContent = log.message;
+        type.textContent = eventLabel(log.type); type.title = log.type; message.textContent = log.type === 'output.truncated' ? messageText(log.message) : log.message;
         node.append(time, type, message); rows.set(key, node);
       }
       if (lines.children[index] !== node) lines.insertBefore(node, lines.children[index] || null);
