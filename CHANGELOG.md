@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 — 2026-09-12
+
+- Split the long dashboard into mounted workspace pages for tasks, projects, usage, environment, settings and sign-in/help. Added hash navigation, direct page entry, browser history handling and per-page scroll restoration without rebuilding forms. The task page now shows a compact readiness guide, a failed-task metric, clearer status accents and a saved list-density choice.
+- Added a report reading mode with a small Markdown subset: headings, flat/indented lists, blockquotes, tables, inline code, fenced code and web links. Escape all content and preserve raw HTML as text; images never create network requests. Source view, copying and downloads retain the original report. Unchanged reports retain their DOM and reading position across live updates.
+- Added a file-based patch viewer with path filtering, change counts, old/new line numbers, C-quoted UTF-8 path decoding, binary/rename metadata, wrapping and 500-line display increments. Filtering is presentation-only; applying, copying and downloading still use the complete patch. Selected files and reading positions survive unrelated live events.
+- Fixed detail navigation and action controls around a scrollable content area, added full-screen narrow-window details and responsive file navigation, and restored focus to a visible page control when a task's original opener no longer exists.
+- Added regression coverage for workspace history/draft preservation, invalid routes, report formatting and injection protection, report-mode persistence, diff parsing/search and incremental rendering. Updated the shell cache and CI script checks for the new frontend modules.
+
+All 107 local Node tests pass. Script syntax, HTML/ARIA references, static selectors and module/cache assets were checked; new frontend assets were fetched from the running local server and matched against their source files. No added dependencies, data migration, changes to execution permissions or native installer publication. Validation uses frontend element adapters and local HTTP/Git fixtures. Real browser layout, native macOS behavior and authenticated model execution still need verification on the user's machine.
+
 ## 0.7.0 — 2026-09-11
 
 - Added execution records for each CLI attempt: phase, start/end/checkpoint time, outcome, exit status, report and bounded stderr. Failed, cancelled and budget-limited attempts retain completed agent messages already received. New attempts do not reuse stale output; earlier and legacy reports remain selectable. Copy/download uses the selected execution.

@@ -11,6 +11,8 @@ import { createLiveConnection } from './connection.js';
 import { preferRun, executionDuration, formatDuration, runningMessage } from './run-state.js';
 import { setupExecutionView } from './execution-view.js';
 import { setupChangeCheck } from './change-check.js';
+import { setupWorkspace } from './workspace.js';
+import { setupDiffView } from './diff-view.js';
 
 const runsEl = document.querySelector("#runs");
 const emptyEl = document.querySelector("#empty");
@@ -26,7 +28,6 @@ let onboarding;
 let visibleLimit = 20;
 let detailTab = "overview";
 const detailTabViews = new Map();
-let currentSection = 'runs-panel';
 let settingsDirty = false;
 let detailRunId = null;
 let renderedDetailRun = null;
@@ -43,9 +44,25 @@ document.querySelector('#run-search').value = savedFilters.query;
 document.querySelector('#state-filter').value = savedFilters.state;
 document.querySelector('#show-archived').checked = savedFilters.archived;
 document.querySelector('#sort-runs').value = savedFilters.sort;
+const workspace = setupWorkspace({onChange: () => closeNotifications()});
+syncNavigation();
+const densityKey = 'codex-control-plane.list-density.v1';
+function setDensity(value) {
+  const density = value === 'compact' ? 'compact' : 'comfortable';
+  runsEl.dataset.density = density;
+  document.querySelectorAll('button[data-density]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.density === density)));
+}
+setDensity(readLocal(densityKey, 'comfortable'));
+document.querySelectorAll('button[data-density]').forEach(button => button.addEventListener('click', () => {
+  setDensity(button.dataset.density); writeLocal(densityKey, runsEl.dataset.density);
+}));
 const eventViewer = createEventViewer(document.querySelector('#event-viewer'), {isActive: () => runDialog.open && detailTab === 'events'});
-const executionView = setupExecutionView(document.querySelector('#detail-output'));
+const executionView = setupExecutionView(document.querySelector('#detail-output'), {
+  readMode: () => readLocal('codex-control-plane.report-mode.v1', 'reading'),
+  saveMode: value => writeLocal('codex-control-plane.report-mode.v1', value),
+});
 const changeCheck = setupChangeCheck({root:document.querySelector('#change-check')});
+const diffView = setupDiffView(document.querySelector('#detail-diff-body'));
 const notificationStorageKey = "codex-control-plane.notifications.v1";
 const notificationPreferenceKey = "codex-control-plane.notification-preferences.v1";
 let notifications = readLocal(notificationStorageKey, []);
@@ -207,6 +224,10 @@ onboarding = setupOnboarding({
   onProject:() => { const form = document.querySelector('#project-form'); form.hidden = false; navigate('catalog-panel'); form.elements.name.focus(); },
   onTask:() => composer.open(),
   onSignedIn:() => { void environment.refresh(); },
+  onReadiness:({ready, connected, busy}) => {
+    document.querySelector('#workspace-guide-title').textContent = ready ? '本地工作区已就绪' : busy ? '正在连接 Codex 账号' : '连接 Codex，开始下一个任务';
+    document.querySelector('#workspace-guide-copy').textContent = !connected ? '正在连接本地执行器，可在“登录与使用”查看操作说明。' : ready ? '先分析，审批后实施；代码变更经再次确认后才应用到原仓库。' : '打开“登录与使用”，检查环境、登录账号并添加本地项目。';
+  },
   onBusyChange:(busy) => {
     loginBusy = busy;
     composer.connectionChanged(runnerConnected && !loginBusy);
@@ -272,7 +293,7 @@ function setDetailTab(name, focus = false) {
   if (changed) {
     const previous = detailTabViews.get(name);
     if (previous) restoreView(runDialog, previous);
-    else runDialog.scrollTop = 0;
+    else document.querySelector('#run-detail').scrollTop = 0;
   }
   if (name === 'events') eventViewer.activate();
 }
@@ -317,7 +338,6 @@ function detailActions(run) {
 
 function renderRunDetail(run, preserve = true) {
   const previous = preserve ? captureView(runDialog) : null;
-  const previousRun = renderedDetailRun;
   renderedDetailRun = run;
   const usage = run.usage || {};
   const nextSteps = {queued:'等待可用的执行名额。',running:'Codex 正在执行，可在“事件”标签页查看实时进度。',approved:'已批准实施，正在等待开始执行。',awaiting_approval:'先在“输出”中阅读分析方案，确认后点击“批准并执行”。',awaiting_merge:'先在“代码变更”中检查补丁，再决定是否应用到原仓库。',completed:'任务已完成，可在“输出”中查看结果。',failed:'查看错误与事件，解决问题后可重试任务。',cancelled:'任务已取消，可重试或归档。',budget_exceeded:'请在“设置”中调整预算后，再重试此任务。',discarded:'隔离工作区中的变更已丢弃。'};
@@ -335,25 +355,21 @@ function renderRunDetail(run, preserve = true) {
   changeCheck.update(run, runnerConnected);
   updateMarkup(document.querySelector('#detail-timeline'), run.events.map((event) => `<article><i></i><time>${new Date(event.at).toLocaleString('zh-CN')}</time><div><strong title="${escapeHtml(event.type)}">${escapeHtml(eventLabel(event.type))}</strong><p>${escapeHtml(messageText(event.message))}</p></div></article>`).join(''));
   eventViewer.update(run);
-  if (!previousRun || previousRun.diff !== run.diff || previousRun.diffStat !== run.diffStat || previousRun.mode !== run.mode) {
-    document.querySelector('[data-copy="diff"]').disabled = !run.diff;
-    document.querySelector('[data-download="diff"]').disabled = !run.diff;
-    updateMarkup(document.querySelector('#detail-diff-body'), run.diff
-      ? `<p class="diff-summary">${escapeHtml(run.diffStat || '')}</p><pre class="diff" data-view="detail-diff">${run.diff.split('\n').map((line) => `<span class="${line.startsWith('+')?'diff-add':line.startsWith('-')?'diff-remove':line.startsWith('@@')?'diff-hunk':''}">${escapeHtml(line)}</span>`).join('\n')}</pre>`
-      : `<p class="tab-empty">${run.mode === 'review' ? '只读审查不会生成修改补丁。' : '批准实施并产生文件修改后，这里会显示代码变更。'}</p>`);
-  }
+  document.querySelector('[data-copy="diff"]').disabled = !run.diff;
+  document.querySelector('[data-download="diff"]').disabled = !run.diff;
+  diffView.update(run);
   const footer = document.querySelector('#detail-actions');
   updateMarkup(footer, detailActions(run));
   setDetailTab(detailTab);
   if (previous) restoreView(runDialog, previous);
-  else runDialog.scrollTop = 0;
+  else document.querySelector('#run-detail').scrollTop = 0;
   updatePendingButtons();
 }
 runDialog.addEventListener("close", () => {
   changeCheck.update(null, runnerConnected);
   detailRunId = null; renderedDetailRun = null; detailTabViews.clear();
   // A live update may have replaced the card that originally opened the dialog.
-  if (!document.activeElement || document.activeElement === document.body) document.querySelector('#run-search').focus({preventScroll:true});
+  if (!document.activeElement || document.activeElement === document.body) document.querySelector(workspace.current() === 'runs-panel' ? '#run-search' : '#workspace-title').focus({preventScroll:true});
 });
 
 function runCard(run) {
@@ -365,7 +381,7 @@ function runCard(run) {
   const latest = run.logs?.at(-1);
   const project = projects.find(item => item.id === run.projectId);
   const phase = run.mode === 'review' && run.phase === 'analysis' ? '只读审查' : phaseLabel(run.phase);
-  return `<article class="run-card compact-card" data-run-id="${id}">
+  return `<article class="run-card compact-card" data-run-id="${id}" data-state="${escapeHtml(run.state)}">
     <div class="run-head"><div><span class="status ${run.state}">${statusLabel[run.state]}</span><h3 title="${escapeHtml(taskTitle(run))}">${escapeHtml(taskTitle(run).slice(0, 240))}</h3></div>
     <div class="run-controls"><button class="${approval ? 'primary' : 'secondary'} detail-run" data-id="${id}" data-open-tab="${tab}">${label}</button>${active ? `<button class="secondary cancel-run" data-id="${id}">取消任务</button>` : ''}${['failed','cancelled','budget_exceeded'].includes(run.state) ? `<button class="secondary retry-run" data-id="${id}">重试任务</button>` : ''}</div></div>
     <p class="repo"><strong>${escapeHtml(project?.name || '未登记项目')}</strong><span title="${escapeHtml(run.repository)}">${escapeHtml(run.repository)}</span></p>
@@ -448,6 +464,7 @@ function render(runs) {
   document.querySelector("#needs-approval").textContent = approval;
   document.querySelector("#approval-count").textContent = approval;
   document.querySelector("#completed-runs").textContent = runs.filter((run) => !run.archived && run.state === "completed").length;
+  document.querySelector('#failed-runs').textContent = runs.filter(run => !run.archived && run.state === 'failed').length;
   renderUsage(runs);
   if (runDialog.open && detailRunId) {
     const selected = runs.find((run) => run.id === detailRunId);
@@ -590,27 +607,18 @@ document.querySelectorAll("#notify-approvals,#notify-results").forEach((control)
 }));
 document.querySelector("#close-run-dialog").addEventListener("click", () => runDialog.close());
 function syncNavigation() {
-  const approvals = currentSection === 'runs-panel' && document.querySelector('#state-filter').value === 'approvals' && !document.querySelector('#show-archived').checked;
-  document.querySelectorAll('.nav').forEach((button) => {
-    const active = approvals ? button.id === 'approvals-nav' || button.dataset.filterNav === 'approvals' : button.dataset.target === currentSection;
-    button.classList.toggle('active',active);
-    if (active) button.setAttribute('aria-current','location'); else button.removeAttribute('aria-current');
-  });
+  workspace.setTaskContext(document.querySelector('#state-filter').value === 'approvals' && !document.querySelector('#show-archived').checked);
 }
 function navigate(target) {
-  currentSection = target;
+  workspace.navigate(target);
   syncNavigation();
-  const section = document.querySelector(`#${target}`);
-  if (section) {
-    section.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
-    section.tabIndex = -1; section.focus({preventScroll:true});
-  }
 }
 
-document.querySelectorAll('.nav[data-target]').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('[data-target]').forEach((button) => button.addEventListener('click', () => {
   if (button.dataset.target === 'runs-panel') clearFilters();
   navigate(button.dataset.target);
 }));
+document.querySelector('.skip-link').addEventListener('click', event => {event.preventDefault(); navigate('runs-panel'); document.querySelector('#runs-panel').focus({preventScroll:true});});
 document.querySelector('#budget-settings').addEventListener('input', () => { settingsDirty = true; document.querySelector('#settings-status').textContent = '有未保存的修改'; });
 document.querySelector('#budget-settings').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -628,7 +636,7 @@ document.querySelector('#budget-settings').addEventListener('submit', async (eve
 document.querySelector("#show-project-form").addEventListener("click", () => (document.querySelector("#project-form").hidden = false));
 document.querySelector("#show-template-form").addEventListener("click", () => (document.querySelector("#template-form").hidden = false));
 document.querySelectorAll(".form-cancel").forEach((button) => button.addEventListener("click", () => (button.closest("form").hidden = true)));
-function filterChanged() { visibleLimit = 20; restoreProjectFilter = ''; writeLocal(filterStorageKey, readFilters()); currentSection = 'runs-panel'; syncNavigation(); render(currentRuns); }
+function filterChanged() { visibleLimit = 20; restoreProjectFilter = ''; writeLocal(filterStorageKey, readFilters()); workspace.navigate('runs-panel', {focus:false}); syncNavigation(); render(currentRuns); }
 function clearFilters() {
   document.querySelector('#run-search').value = ''; document.querySelector('#state-filter').value = ''; document.querySelector('#project-filter').value = ''; document.querySelector('#show-archived').checked = false; filterChanged();
 }

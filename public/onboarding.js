@@ -1,6 +1,6 @@
 import { messageText } from './locale.js';
 
-export function setupOnboarding({request, notify, onEnvironment, onProject, onTask, onSignedIn, onBusyChange}) {
+export function setupOnboarding({request, notify, onEnvironment, onProject, onTask, onSignedIn, onBusyChange, onReadiness = () => {}}) {
   const panel = document.querySelector('#setup-panel');
   const status = document.querySelector('#login-status');
   const message = document.querySelector('#login-message');
@@ -32,6 +32,7 @@ export function setupOnboarding({request, notify, onEnvironment, onProject, onTa
     projectButton.disabled = !connected || state.busy;
     panel.dataset.ready = String(Boolean(toolsReady && state.state === 'signed_in' && projectCount));
     document.querySelector('#setup-title').textContent = panel.dataset.ready === 'true' ? '可以开始下一个任务了' : '开始使用 Codex';
+    onReadiness({ready: panel.dataset.ready === 'true', connected, busy: state.busy});
   }
   function accept(next) {
     if (next.instanceId === state.instanceId && next.revision < state.revision) return;

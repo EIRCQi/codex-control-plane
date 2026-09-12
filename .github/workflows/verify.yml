@@ -33,5 +33,8 @@ jobs:
       - run: node --check public/run-state.js
       - run: node --check public/execution-view.js
       - run: node --check public/change-check.js
+      - run: node --check public/workspace.js
+      - run: node --check public/report-view.js
+      - run: node --check public/diff-view.js
       - run: node --check scripts/launch.mjs
       - run: node --check scripts/status.mjs

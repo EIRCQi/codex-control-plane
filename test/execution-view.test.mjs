@@ -5,13 +5,14 @@ import { runDownload } from '../public/run-view.js';
 
 test('reading an earlier execution stays selected during live updates; exports use the chosen report', () => {
   class Element {
-    children=[];value='';textContent='';listeners=new Map();
+    children=[];value='';textContent='';listeners=new Map();dataset={};
+    setAttribute(name,value){this[name]=value;}
     addEventListener(type,fn){this.listeners.set(type,fn);}event(type){this.listeners.get(type)?.();}
     replaceChildren(){this.children=[];}append(node){this.children.push(node);}
   }
   const nodes=new Map();const get=selector=>{if(!nodes.has(selector))nodes.set(selector,new Element());return nodes.get(selector);};
   const buttons=[new Element(),new Element()];
-  const root={ownerDocument:{createElement:()=>new Element()},querySelector:get,querySelectorAll:()=>buttons};
+  const root={ownerDocument:{createElement:()=>new Element()},querySelector:get,querySelectorAll:selector=>selector==='[data-report-mode]'?[]:buttons};
   const view=setupExecutionView(root);
   const first={seq:1,phase:'analysis',status:'failed',output:'<script>中文报告</script>',diagnostics:'failure details'};
   let run={id:'a',output:'latest',executions:[first,{seq:2,phase:'analysis',status:'running',output:'new partial'}]};

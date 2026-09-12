@@ -10,11 +10,12 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/workspace.css" />
   </head>
   <body>
     <a class="skip-link" href="#runs-panel">跳转到任务列表</a>
     <aside>
-      <div class="brand"><span class="brand-mark">C</span><span>Codex 控制台</span></div>
+      <div class="brand"><span class="brand-mark">C</span><span>Codex 控制台<small>本地任务工作台</small></span></div>
       <nav aria-label="主导航">
         <button class="nav active" data-target="runs-panel">⌁ <span>任务控制台</span></button>
         <button class="nav" data-target="catalog-panel">◇ <span>项目与模板</span></button>
@@ -22,15 +23,17 @@
         <button class="nav" data-target="usage-panel">⌇ <span>用量统计</span></button>
         <button class="nav" data-target="environment-panel">◈ <span>环境检查</span></button>
         <button class="nav" data-target="budget-settings">⚙ <span>设置</span></button>
+        <button class="nav" data-target="setup-panel">? <span>登录与使用</span></button>
       </nav>
-      <div class="local-status"><i></i><div><strong>本地执行器</strong><small>已连接</small></div></div>
+      <p class="nav-shortcuts"><kbd>N</kbd> 新建任务 <span>·</span> <kbd>/</kbd> 搜索</p>
+      <div class="local-status disconnected"><i></i><div><strong>本地执行器</strong><small>正在连接</small></div></div>
     </aside>
     <main>
       <nav class="mobile-nav" aria-label="页面导航">
-        <button class="nav active" data-target="runs-panel">任务</button><button class="nav" data-filter-nav="approvals">审批中心</button><button class="nav" data-target="catalog-panel">项目</button><button class="nav" data-target="usage-panel">用量统计</button><button class="nav" data-target="environment-panel">环境检查</button><button class="nav" data-target="budget-settings">设置</button>
+        <button class="nav active" data-target="runs-panel">任务</button><button class="nav" data-filter-nav="approvals">审批中心</button><button class="nav" data-target="catalog-panel">项目</button><button class="nav" data-target="usage-panel">用量</button><button class="nav" data-target="environment-panel">环境</button><button class="nav" data-target="budget-settings">设置</button><button class="nav" data-target="setup-panel">登录与使用</button>
       </nav>
       <header>
-        <div><p class="eyebrow">本地工作区 <span id="app-version"></span></p><h1>任务控制台</h1></div>
+        <div class="workspace-heading"><p class="eyebrow">本地工作区 <span id="app-version"></span></p><h1 id="workspace-title" tabindex="-1">任务控制台</h1><p id="workspace-description">查看执行进度，处理审批，回看每一次任务结果。</p></div>
         <div class="header-actions">
           <button class="secondary install-app" id="install-app" type="button" hidden>安装为应用</button>
           <button class="notification-button" id="notification-button" type="button" aria-label="打开通知" aria-expanded="false">♢<b id="notification-badge" hidden>0</b></button>
@@ -49,7 +52,7 @@
       </header>
       <div id="connection-banner" class="connection-banner" role="status"><span>正在连接本地执行器……若服务已停止，请运行 <code>npm run open</code>，并保持终端打开。</span><button type="button" class="secondary" id="reconnect-runner">立即重连</button></div>
       <div id="operation-error" class="operation-error" role="alert" hidden><span id="operation-error-message"></span><button class="icon" id="dismiss-error" aria-label="关闭错误提示">×</button></div>
-      <section id="setup-panel" class="setup-panel" aria-labelledby="setup-title">
+      <section id="setup-panel" class="setup-panel" data-workspace="setup-panel" aria-labelledby="setup-title" hidden>
         <div class="setup-heading"><div><p class="eyebrow">快速开始</p><h2 id="setup-title">开始使用 Codex</h2></div><span id="login-status" class="setup-status" role="status">尚未检查登录</span></div>
         <div class="setup-steps">
           <div><span class="setup-number">1</span><div><strong>检查运行环境</strong><p id="setup-tools-state">正在检查本地工具……</p></div><button type="button" class="secondary" id="setup-environment">环境检查</button></div>
@@ -69,14 +72,16 @@
           <p>新建任务前，请先提交或妥善保存仓库中已有的修改。“应用到原仓库”会把变更写回本机并加入 Git 暂存区，之后仍需你自行提交和推送到 GitHub。</p>
         </details>
       </section>
-      <section class="metrics">
+      <div data-workspace="runs-panel">
+      <div class="workspace-guide"><span class="guide-mark" aria-hidden="true">↗</span><div><strong id="workspace-guide-title">连接 Codex，开始第一个任务</strong><p id="workspace-guide-copy">检查环境、登录账号，然后添加本地项目。</p></div><button type="button" class="secondary" data-target="setup-panel">登录与使用</button></div>
+      <section class="metrics" aria-label="任务概览">
         <button class="metric-action" data-filter-nav="active"><span>执行中的任务</span><strong id="active-runs">0</strong><small>查看运行任务 →</small></button>
         <button class="metric-action" data-filter-nav="approvals"><span>待审批</span><strong id="needs-approval">0</strong><small>处理审批请求 →</small></button>
         <button class="metric-action" data-filter-nav="completed"><span>已完成</span><strong id="completed-runs">0</strong><small>查看完成结果 →</small></button>
-        <article><span>权限模式</span><strong class="safe">审批保护</strong><small>等待审批</small></article>
+        <button class="metric-action" data-filter-nav="failed"><span>失败任务</span><strong id="failed-runs">0</strong><small>检查原因并重试 →</small></button>
       </section>
       <section class="panel" id="runs-panel" tabindex="-1">
-        <div class="panel-title"><div><p class="eyebrow">执行队列</p><h2>任务列表</h2></div><span class="live"><i></i><span id="live-status">正在连接</span></span></div>
+        <div class="panel-title"><div><p class="eyebrow">执行队列</p><h2>任务列表</h2></div><div class="list-tools"><div class="segmented" role="group" aria-label="列表密度"><button type="button" data-density="comfortable" aria-pressed="true">舒适</button><button type="button" data-density="compact" aria-pressed="false">紧凑</button></div><span class="live"><i></i><span id="live-status">正在连接</span></span></div></div>
         <div class="quick-filters" role="group" aria-label="任务快捷筛选">
           <button type="button" class="filter-chip" data-quick-filter="" aria-pressed="true">全部状态</button><button type="button" class="filter-chip" data-quick-filter="active" aria-pressed="false">执行中</button><button type="button" class="filter-chip" data-quick-filter="approvals" aria-pressed="false">待审批</button><button type="button" class="filter-chip" data-quick-filter="failed" aria-pressed="false">失败</button>
           <button type="button" class="text-button" id="clear-filters" hidden>清除筛选</button>
@@ -90,10 +95,11 @@
           <span id="filter-count" role="status"></span>
         </div>
         <div id="empty" class="empty"><div>⌁</div><h3>暂无任务</h3><p>新建任务后，Codex 会先进行只读分析。</p><button class="secondary" id="empty-action" type="button">新建任务</button></div>
-        <div id="runs" class="runs"></div>
+        <div id="runs" class="runs" data-density="comfortable"></div>
         <div class="run-pagination"><button class="secondary" id="load-more" hidden>再显示 20 条</button></div>
       </section>
-      <section class="catalog-panel" id="catalog-panel">
+      </div>
+      <section class="catalog-panel" id="catalog-panel" data-workspace="catalog-panel" hidden>
         <div class="panel-title"><div><p class="eyebrow">项目管理</p><h2>项目与模板</h2></div><span class="usage-note">保存在本机</span></div>
         <div class="catalog-grid">
           <div class="catalog-column">
@@ -119,7 +125,7 @@
           </div>
         </div>
       </section>
-      <section class="usage-panel" id="usage-panel">
+      <section class="usage-panel" id="usage-panel" data-workspace="usage-panel" hidden>
         <div class="panel-title"><div><p class="eyebrow">执行用量</p><h2>用量概览</h2></div><span class="usage-note">按执行事件记录 Token</span></div>
         <div class="usage-metrics">
           <article><span>Token 总量</span><strong id="total-tokens">0</strong><small>所有本地任务的累计用量</small></article>
@@ -134,6 +140,9 @@
         <div class="usage-table-wrap"><table><thead><tr><th>任务</th><th>模型</th><th>输入</th><th>缓存</th><th>输出</th><th>合计</th><th>运行时长</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
         <div class="usage-pagination"><span id="usage-count"></span><button class="secondary" type="button" id="usage-more" hidden>再显示 30 条</button></div>
         <p class="cost-note">这里只统计实际 Token；通过 ChatGPT 登录的 Codex 用量无法直接按 API 单价换算费用。</p>
+        <div class="section-link"><span>需要调整预算或并发数？</span><button class="secondary" type="button" data-target="budget-settings">打开设置 →</button></div>
+      </section>
+      <section class="settings-panel" data-workspace="budget-settings" hidden>
         <form class="budget-settings" id="budget-settings">
           <div><p class="eyebrow">用量控制</p><h3>预算与并发</h3><p>0 表示不限制。重试累计用量；保存新上限会检查排队及执行中的任务。</p></div>
           <label>最大并发数<input name="maxConcurrentRuns" type="number" min="1" max="8" required /></label>
@@ -143,7 +152,7 @@
           <span id="settings-status" role="status"></span>
         </form>
       </section>
-      <section class="environment-panel" id="environment-panel" aria-labelledby="environment-title">
+      <section class="environment-panel" id="environment-panel" data-workspace="environment-panel" aria-labelledby="environment-title" hidden>
         <div class="panel-title"><div><p class="eyebrow">运行准备</p><h2 id="environment-title">环境检查</h2></div><button class="secondary" id="refresh-environment" type="button">重新检查</button></div>
         <div class="environment-overview"><strong class="environment-summary" id="environment-summary">等待连接本地执行器</strong><small id="environment-meta"></small></div>
         <div class="environment-checks" id="environment-checks"></div>
@@ -185,13 +194,14 @@
           <button type="button" id="tab-events" role="tab" data-detail-tab="events" aria-controls="detail-events" aria-selected="false" tabindex="-1">事件</button>
           <button type="button" id="tab-diff" role="tab" data-detail-tab="diff" aria-controls="detail-diff" aria-selected="false" tabindex="-1">代码变更</button>
         </div>
-        <div id="run-detail">
+        <div id="run-detail" data-view="detail-content">
           <section id="detail-overview" data-tab-panel="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0"><div id="detail-overview-body"></div></section>
           <section id="detail-output" data-tab-panel="output" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
             <div class="content-toolbar"><h3 id="detail-output-title">执行结果</h3><div class="content-actions"><button type="button" class="secondary" data-copy="output" disabled>复制结果</button><button type="button" class="secondary" data-download="output" disabled>下载报告</button></div></div>
             <label class="execution-picker">执行记录<select data-execution-select aria-label="选择一次执行的输出"></select></label>
             <p data-execution-note class="execution-note" role="status"></p>
-            <div id="detail-output-body"><pre data-execution-report data-view="report" hidden></pre><p class="tab-empty" data-execution-empty>暂无报告。</p></div>
+            <div class="report-toolbar"><div class="segmented" role="group" aria-label="报告显示方式"><button type="button" data-report-mode="reading" aria-pressed="true">阅读模式</button><button type="button" data-report-mode="source" aria-pressed="false">原文</button></div><span>复制与下载始终保留原文</span></div>
+            <div id="detail-output-body"><div class="report-reading" data-report-reading data-view="report-reading" tabindex="0" role="region" aria-label="格式化报告" hidden></div><pre data-execution-report data-view="report" tabindex="0" aria-label="报告原文" hidden></pre><p class="tab-empty" data-execution-empty>暂无报告。</p></div>
             <details data-execution-diagnostics class="execution-diagnostics" hidden><summary>诊断信息</summary><p data-diagnostic-note></p><pre data-diagnostic-body data-view="diagnostics"></pre></details>
             <p class="execution-retention">保留最近 20 次执行记录。切换记录后，复制和下载对应当前选择；重试用量仍累计。</p>
           </section>
@@ -208,7 +218,17 @@
           <section id="detail-diff" data-tab-panel="diff" role="tabpanel" aria-labelledby="tab-diff" tabindex="0" hidden>
             <div class="content-toolbar"><h3>代码变更</h3><div class="content-actions"><button type="button" class="secondary" data-copy="diff" disabled>复制补丁</button><button type="button" class="secondary" data-download="diff" disabled>下载补丁</button></div></div>
             <div id="change-check" class="change-check" hidden><button type="button" class="secondary" data-check-changes>检查是否可应用</button><p data-check-status role="status"></p></div>
-            <div id="detail-diff-body"></div>
+            <div id="detail-diff-body">
+              <p class="tab-empty" data-diff-empty>产生代码修改后，这里会显示变更。</p>
+              <div data-diff-workspace hidden>
+                <div class="diff-overview"><p data-diff-summary></p><label class="wrap-toggle"><input type="checkbox" data-diff-wrap /> 自动换行</label></div>
+                <div class="diff-layout">
+                  <div class="diff-files"><label>变更文件<input type="search" data-diff-search placeholder="搜索文件路径……" /></label><span data-diff-count role="status"></span><div data-diff-files class="diff-file-list" role="group" aria-label="选择变更文件"></div></div>
+                  <div class="diff-content"><div class="diff-file-heading"><strong data-diff-title></strong><span data-diff-meta></span></div><div class="diff-code" data-diff-lines data-view="detail-diff" tabindex="0" role="region" aria-label="当前文件的代码变更"></div><div class="diff-pagination"><span data-diff-progress></span><button class="secondary" type="button" data-diff-more hidden>再显示 500 行</button></div></div>
+                </div>
+                <p class="diff-scope-note">文件筛选仅改变查看范围。“应用到原仓库”、复制和下载仍包含整个任务的补丁。</p>
+              </div>
+            </div>
           </section>
         </div>
         <div class="detail-footer"><p id="detail-error" class="error" role="alert"></p><div id="detail-actions" class="detail-actions"></div></div>
