@@ -72,6 +72,10 @@ const messages = new Map([
   ['Only an active run can be cancelled', '只能取消排队中或执行中的任务。'],
   ['Only a failed, cancelled or budget-limited run can be retried', '只能重试失败、已取消或因预算停止的任务。'],
   ['Task queued', '任务已加入队列'],
+  ['Git command cancelled', 'Git 操作已取消。'],
+  ['Template description must be text', '模板说明必须是文本。'],
+  ['Too many event connections; close unused windows and reconnect', '实时连接数量已达上限，请关闭不再使用的控制台窗口后重连。'],
+  ['Task creation was interrupted before confirmation; review and retry the task', '任务创建尚未确认时执行器已中断，请检查后手动重试。'],
   ['Codex turn failed', 'Codex 执行轮次失败，请查看诊断信息。'],
   ['An oversized Codex event was skipped; later events will still be processed', '已跳过一条超过大小限制的事件，后续事件会继续处理。'],
   ['An oversized diagnostic line was truncated', '一条过长的诊断信息已截断。'],
@@ -96,6 +100,9 @@ const messages = new Map([
 ]);
 
 const patterns = [
+  [/^Git command timed out after (\d+) ms; inspect the repository before retrying$/, ms => `Git 操作超过 ${Number(ms) / 1000} 秒，已停止。请先检查仓库状态，再决定是否重试。`],
+  [/^Git output exceeded (\d+) bytes; no partial result was accepted$/, bytes => `Git 输出超过 ${Number(bytes) / 1024 / 1024} MiB，操作已停止；不会使用不完整的结果。请缩小变更范围后重试。`],
+  [/^Git input failed: (.+)$/, code => `Git 输入写入失败：${code}`],
   [/^Retry (\d+) queued$/, n => `第 ${n} 次重试已加入队列`],
   [/^Isolated worktree created on (.+)$/, branch => `已创建隔离工作区，分支：${branch}`],
   [/^Run token budget exceeded \(([^\n]+)\)$/, usage => `单任务 Token 预算已超限（${usage}）`],

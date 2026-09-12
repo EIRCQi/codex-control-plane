@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
 import { aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
-import { saveJson, loadJson } from "./lib/storage.mjs";
+import { saveJson, loadJson, createSnapshotWriter, createCollectionWriter } from "./lib/storage.mjs";
 import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
 import { createRunPublisher } from "./lib/live-events.mjs";
 import { startupErrorMessage } from "./lib/startup.mjs";
@@ -16,6 +16,8 @@ import { createAuthManager } from "./lib/auth.mjs";
 import { applicationId } from "./lib/launcher.mjs";
 import { defaultSettings, validateSettings, budgetReason } from './lib/budget.mjs';
 import { beginExecution, checkpointExecution, appendReport, appendDiagnostic, finishExecution, recoverExecutions, createLineReader, parseCodexLine } from './lib/execution.mjs';
+import { createEventHub } from './lib/event-hub.mjs';
+import { createCommandRunner } from './lib/commands.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -34,8 +36,14 @@ const templatesFile = path.join(dataDir, "templates.json");
 const port = Number(process.env.PORT || 4310);
 const worktreeRoot = path.join(os.tmpdir(), "codex-control-plane-worktrees");
 const runs = new Map();
+const creatingRuns = new Set();
 const processes = new Map();
-const eventClients = new Set();
+const eventHub = createEventHub();
+const requestJobs = new Set();
+const requestBodies = new Set();
+const runControllers = new Map();
+const shutdownController = new AbortController();
+const gitRunner = createCommandRunner({env:runnerEnv, timeoutMs:Number(process.env.CODEX_CONTROL_PLANE_GIT_TIMEOUT_MS || 120000)});
 const projects = new Map();
 const actionLocks = new Set();
 const jobs = new Set();
@@ -43,12 +51,27 @@ let ready = false;
 let stopping = false;
 let customTemplates = [];
 let settings = { ...defaultSettings };
+const visibleRuns = () => [...runs.values()].filter(run => !creatingRuns.has(run.id));
+const runWriter = createSnapshotWriter(
+  () => [...runs.values()].map(run => creatingRuns.has(run.id) ? {...run, creationPending:true} : run),
+  value => saveJson(dataFile, value),
+);
+const updateProjects = createCollectionWriter({
+  read:() => projects,
+  write:next => saveJson(projectsFile,[...next.values()]),
+  commit:next => {projects.clear();for(const [id,project] of next)projects.set(id,project);broadcast('catalog',{projects:[...projects.values()],templates:allTemplates()});},
+});
+const updateTemplates = createCollectionWriter({
+  read:() => customTemplates,
+  write:next => saveJson(templatesFile,next),
+  commit:next => {customTemplates=next;broadcast('catalog',{projects:[...projects.values()],templates:allTemplates()});},
+});
 const auth = createAuthManager({
   getExecutable: () => resolveTool('codex', runtimeSettings, runnerEnv),
   env: runnerEnv,
   onChange: (state) => {
     diagnosticsPromise = null;
-    if (!stopping) for (const client of eventClients) client.write(`event: auth\ndata: ${JSON.stringify(state)}\n\n`);
+    broadcast('auth',state);
   },
 });
 
@@ -76,12 +99,13 @@ async function initialize() {
       run.queuedAction ||= run.phase === "implementation" ? "implementation" : "analysis";
       run.starting = false;
       recoverExecutions(run);
-      if (run.state === "running") {
+      if (run.state === "running" || run.creationPending) {
         run.state = "failed";
-        run.error = "Control plane restarted while this phase was running";
+        run.error = run.creationPending ? 'Task creation was interrupted before confirmation; review and retry the task' : "Control plane restarted while this phase was running";
         run.updatedAt = new Date().toISOString();
         run.events.push({ type: "run.failed", message: run.error, at: run.updatedAt });
       }
+      delete run.creationPending;
       touchRun(run, run.updatedAt);
       runs.set(run.id, run);
     }
@@ -89,8 +113,7 @@ async function initialize() {
 }
 
 function writeRun(run) {
-  const payload = `event: run\ndata: ${JSON.stringify(run)}\n\n`;
-  for (const client of eventClients) client.write(payload);
+  if (!creatingRuns.has(run.id) && runs.has(run.id)) broadcast('run',run);
 }
 
 const runPublisher = createRunPublisher(writeRun);
@@ -98,25 +121,14 @@ const emitRun = (run) => runPublisher.immediate(run);
 
 async function persist(run) {
   if (run) touchRun(run);
-  await saveJson(dataFile, [...runs.values()]);
+  await runWriter.flush();
   if (run) emitRun(run);
-  else for (const client of eventClients) client.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
+  else broadcast('snapshot',visibleRuns());
 }
 
 function broadcast(type, value) {
   if (stopping) return;
-  const payload = `event: ${type}\ndata: ${JSON.stringify(value)}\n\n`;
-  for (const client of eventClients) client.write(payload);
-}
-
-async function persistProjects() {
-  await saveJson(projectsFile, [...projects.values()]);
-  broadcast('catalog', { projects: [...projects.values()], templates: allTemplates() });
-}
-
-async function persistTemplates() {
-  await saveJson(templatesFile, customTemplates);
-  broadcast('catalog', { projects: [...projects.values()], templates: allTemplates() });
+  eventHub.broadcast(type,value);
 }
 
 const allTemplates = () => [...builtInTemplates, ...customTemplates];
@@ -146,53 +158,39 @@ async function inspectRepository(input) {
   await access(path.join(resolved, ".git"));
   const branch = (await git(resolved, ["branch", "--show-current"])).trim() || "detached";
   let remote = null;
-  try { remote = (await git(resolved, ["remote", "get-url", "origin"])).trim() || null; } catch {}
+  try { remote = (await git(resolved, ["remote", "get-url", "origin"])).trim() || null; } catch(error) {if(error.code !== 'COMMAND_EXIT')throw error;}
   return { resolved, branch, remote };
 }
 
 async function validateRepository(input) {
   const { resolved } = await inspectRepository(input);
   try { await git(resolved, ['rev-parse', '--verify', 'HEAD']); }
-  catch { throw new Error('Repository needs an initial Git commit before starting a task'); }
+  catch(error) {if(error.code !== 'COMMAND_EXIT')throw error;throw new Error('Repository needs an initial Git commit before starting a task');}
   const status = await git(resolved, ["status", "--porcelain"]);
   if (status.trim()) throw new Error("Repository must be clean before starting an isolated run");
   return resolved;
 }
 
-function command(commandName, args, cwd, input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(commandName, args, { cwd, env: runnerEnv, windowsHide: true, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${commandName} exited with code ${code}`)));
-    if (input) { child.stdin.on("error", reject); child.stdin.end(input); }
-  });
-}
-
-const git = async (cwd, args, input) => command(await resolveTool("git", runtimeSettings, runnerEnv), args, cwd, input);
+const git = async (cwd,args,input,{run,cleanup=false}={}) => gitRunner.run(await resolveTool('git',runtimeSettings,runnerEnv),args,{cwd,input,signal:cleanup ? undefined : runControllers.get(run?.id)?.signal || shutdownController.signal});
 
 async function createWorktree(run, { preserveBaseline = false } = {}) {
   if (preserveBaseline) requireBaseline(run);
   else {
-    run.baseHead = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
-    run.baseRef = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+    run.baseHead = (await git(run.repository, ["rev-parse", "HEAD"],undefined,{run})).trim();
+    run.baseRef = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"],undefined,{run}).catch(error => {if(error.code !== 'COMMAND_EXIT')throw error;return '';})).trim();
   }
   run.branch = `codex-control-plane/${run.id}`;
   run.worktree = path.join(worktreeRoot, run.id);
-  await git(run.repository, ["worktree", "add", "-b", run.branch, run.worktree, run.baseHead]);
+  await persist(run);
+  await git(run.repository, ["worktree", "add", "-b", run.branch, run.worktree, run.baseHead],undefined,{run});
   run.events.push({ type: "worktree.created", message: `Isolated worktree created on ${run.branch}`, at: new Date().toISOString() });
 }
 
 async function cleanupWorktree(run) {
   if (!run.worktree) return;
-  try { await git(run.repository, ["worktree", "remove", "--force", run.worktree]); }
+  try { await git(run.repository, ["worktree", "remove", "--force", run.worktree],undefined,{cleanup:true}); }
   catch { await rm(run.worktree, { recursive: true, force: true }); }
-  try { await git(run.repository, ["branch", "-D", run.branch]); } catch {}
+  try { await git(run.repository, ["branch", "-D", run.branch],undefined,{cleanup:true}); } catch {}
   run.worktree = null;
 }
 
@@ -205,16 +203,16 @@ function requireBaseline(run) {
 async function verifyRepositoryBaseline(run) {
   requireBaseline(run);
   const head = (await git(run.repository, ["rev-parse", "HEAD"])).trim();
-  const ref = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+  const ref = (await git(run.repository, ["symbolic-ref", "-q", "HEAD"]).catch(error => {if(error.code !== 'COMMAND_EXIT')throw error;return '';})).trim();
   if (head !== run.baseHead || ref !== run.baseRef) throw new Error("Original repository HEAD or branch changed; create a new run");
   const status = await git(run.repository, ["status", "--porcelain"]);
   if (status.trim()) throw new Error("Original repository changed during the run; clean it before continuing");
 }
 
-async function resetWorktree(run) {
+async function resetWorktree(run, {cleanup=false}={}) {
   requireBaseline(run);
-  await git(run.worktree, ["reset", "--hard", run.baseHead]);
-  await git(run.worktree, ["clean", "-fd"]);
+  await git(run.worktree, ["reset", "--hard", run.baseHead],undefined,{run,cleanup});
+  await git(run.worktree, ["clean", "-fd"],undefined,{run,cleanup});
 }
 
 function stopChild(child) {
@@ -318,10 +316,10 @@ async function implement(run) {
       `${run.prompt}\n\nImplement the requested change. Work only inside this repository. Run relevant tests and summarize the changes.`,
     );
     requireBaseline(run);
-    await git(run.worktree, ["add", "-N", "."]);
+    await git(run.worktree, ["add", "-N", "."],undefined,{run});
     const diffOptions = ["--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/"];
-    const diffStat = await git(run.worktree, ["diff", ...diffOptions, "--stat", run.baseHead, "--"]);
-    const diff = await git(run.worktree, ["diff", ...diffOptions, "--binary", run.baseHead, "--"]);
+    const diffStat = await git(run.worktree, ["diff", ...diffOptions, "--stat", run.baseHead, "--"],undefined,{run});
+    const diff = await git(run.worktree, ["diff", ...diffOptions, "--binary", run.baseHead, "--"],undefined,{run});
     if (!diff.trim()) {
       await cleanupWorktree(run);
       transition(run, "completed", "Implementation completed with no file changes");
@@ -331,7 +329,7 @@ async function implement(run) {
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Implementation failed", { error: error.message });
     else if (run.worktree) {
-      await resetWorktree(run);
+      await resetWorktree(run,{cleanup:true});
     }
   }
   await persist(run);
@@ -363,7 +361,7 @@ async function checkChanges(run) {
 function drainQueue() {
   if (!ready || stopping) return;
   while ([...runs.values()].filter((run) => run.starting).length < settings.maxConcurrentRuns) {
-    const run = [...runs.values()].find((candidate) => !candidate.starting && (
+    const run = [...runs.values()].find((candidate) => !creatingRuns.has(candidate.id) && !candidate.starting && (
       (candidate.state === "queued" && candidate.queuedAction === "analysis") ||
       (candidate.state === "approved" && candidate.queuedAction === "implementation")
     ));
@@ -373,9 +371,11 @@ function drainQueue() {
       continue;
     }
     run.starting = true;
+    runControllers.set(run.id,new AbortController());
     const job = run.queuedAction === "implementation" ? implement : analyze;
     const pending = job(run).catch((error) => console.error(error)).finally(async () => {
       run.starting = false;
+      runControllers.delete(run.id);
       await persist(run).catch((error) => console.error(error));
       jobs.delete(pending);
       drainQueue();
@@ -389,6 +389,7 @@ function enforceBudget(run) {
   const reason = budgetReason(run, settings, repositoryTokens(run.repository));
   if (!reason) return false;
   exceedBudget(run, reason);
+  runControllers.get(run.id)?.abort();
   stopChild(processes.get(run.id));
   return true;
 }
@@ -452,25 +453,24 @@ async function api(req, res, url) {
     return send(res, 200, next);
   }
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return send(res, 200, { app:applicationId, ready:ready && !stopping, version: appVersion, activeRuns: processes.size });
+    return send(res, 200, { app:applicationId, ready:ready && !stopping, version: appVersion, activeRuns: processes.size, activeJobs:jobs.size, queuedRuns:visibleRuns().filter(run=>!run.starting && ['queued','approved'].includes(run.state)).length, gitCommands:gitRunner.size, eventConnections:eventHub.size });
   }
   if (req.method === "GET" && url.pathname === "/api/events") {
+    const client=eventHub.attach(res);
+    if (!client) return send(res,503,{error:'Too many event connections; close unused windows and reconnect'});
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    res.write("retry: 1500\n\n");
-    eventClients.add(res);
-    res.write(`event: session\ndata: ${JSON.stringify({runnerId})}\n\n`);
-    res.write(`event: snapshot\ndata: ${JSON.stringify([...runs.values()])}\n\n`);
-    res.write(`event: auth\ndata: ${JSON.stringify(auth.snapshot())}\n\n`);
-    const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15000);
-    req.on("close", () => { clearInterval(heartbeat); eventClients.delete(res); });
+    client.enqueue('retry','retry: 1500\n\n');
+    client.send('session',{runnerId});
+    client.send('snapshot',visibleRuns());
+    client.send('auth',auth.snapshot());
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/runs") {
-    return send(res, 200, [...runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    return send(res, 200, visibleRuns().sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
   }
   const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
   const checkMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/change-check$/);
@@ -479,7 +479,7 @@ async function api(req, res, url) {
     return run ? send(res, 200, await checkChanges(run)) : send(res, 404, {error:'Run not found'});
   }
   if (req.method === "GET" && runMatch) {
-    const run = runs.get(runMatch[1]);
+    const run = creatingRuns.has(runMatch[1]) ? null : runs.get(runMatch[1]);
     return run ? send(res, 200, run) : send(res, 404, { error: "Run not found" });
   }
   if (req.method === "DELETE" && runMatch) {
@@ -513,18 +513,19 @@ async function api(req, res, url) {
   }
   if (req.method === "POST" && url.pathname === "/api/projects") {
     const body = await jsonBody(req);
-    if (!body.name?.trim()) throw new Error("Project name is required");
+    if (typeof body.name !== 'string' || !body.name.trim()) throw new Error("Project name is required");
     const info = await inspectRepository(body.repository);
-    if ([...projects.values()].some((project) => project.repository === info.resolved)) throw new Error("This repository is already registered");
     const project = createProject({ name: body.name, repository: info.resolved, branch: info.branch, remote: info.remote });
-    projects.set(project.id, project);
-    await persistProjects();
+    await updateProjects(next=>{
+      if ([...next.values()].some(item=>item.repository===info.resolved)) throw new Error('This repository is already registered');
+      next.set(project.id,project);
+    });
     return send(res, 201, project);
   }
   const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
   if (req.method === "DELETE" && projectMatch) {
-    if (!projects.delete(projectMatch[1])) return send(res, 404, { error: "Project not found" });
-    await persistProjects();
+    if (!projects.has(projectMatch[1])) return send(res, 404, { error: "Project not found" });
+    await updateProjects(next=>next.delete(projectMatch[1]));
     return send(res, 200, { deleted: true });
   }
   if (req.method === "GET" && url.pathname === "/api/templates") {
@@ -532,18 +533,17 @@ async function api(req, res, url) {
   }
   if (req.method === "POST" && url.pathname === "/api/templates") {
     const body = await jsonBody(req);
-    if (!body.name?.trim() || !body.prompt?.trim()) throw new Error("Template name and prompt are required");
+    if (typeof body.name !== 'string' || typeof body.prompt !== 'string' || !body.name.trim() || !body.prompt.trim()) throw new Error("Template name and prompt are required");
+    if (body.description !== undefined && typeof body.description !== 'string') throw new Error('Template description must be text');
     const template = createTemplate(body);
-    customTemplates.push(template);
-    await persistTemplates();
+    await updateTemplates(next=>next.push(template));
     return send(res, 201, template);
   }
   const templateMatch = url.pathname.match(/^\/api\/templates\/([^/]+)$/);
   if (req.method === "DELETE" && templateMatch) {
     const index = customTemplates.findIndex((template) => template.id === templateMatch[1]);
     if (index < 0) return send(res, 404, { error: "Custom template not found" });
-    customTemplates.splice(index, 1);
-    await persistTemplates();
+    await updateTemplates(next=>{const position=next.findIndex(item=>item.id===templateMatch[1]);if(position>=0)next.splice(position,1);});
     return send(res, 200, { deleted: true });
   }
   if (req.method === "POST" && url.pathname === "/api/runs") {
@@ -551,7 +551,7 @@ async function api(req, res, url) {
     const project = body.projectId ? projects.get(body.projectId) : null;
     if (body.projectId && !project) throw new Error("Project not found");
     const repository = await validateRepository(project?.repository || body.repository);
-    if (!body.prompt?.trim()) throw new Error("Task description is required");
+    if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw new Error("Task description is required");
     const template = body.templateId ? allTemplates().find((item) => item.id === body.templateId) : null;
     if (body.templateId && !template) throw new Error("Template not found");
     const mode = template?.mode === "review" ? "review" : (body.mode || "implement");
@@ -564,12 +564,14 @@ async function api(req, res, url) {
     }
     const run = createRun({ id: randomUUID(), repository, prompt, task: body.prompt.trim(), templatePrompt: template?.prompt || null, mode, projectId: project?.id, templateId: template?.id });
     run.runnerId = runnerId;
-    runs.set(run.id, run);
     if (project) {
-      project.lastUsedAt = new Date().toISOString();
-      await persistProjects();
+      await updateProjects(next=>{const current=next.get(project.id);if(current)next.set(project.id,{...current,lastUsedAt:new Date().toISOString()});});
     }
-    await persist(run);
+    creatingRuns.add(run.id); runs.set(run.id,run);
+    try {await persist(run);}
+    catch(error){runs.delete(run.id);await runWriter.flush().catch(failure=>console.error(failure));throw error;}
+    finally {creatingRuns.delete(run.id);}
+    emitRun(run);
     drainQueue();
     return send(res, 202, run);
   }
@@ -586,6 +588,7 @@ async function api(req, res, url) {
       run.events.push({ type: `run.${match[2]}`, message: run.archived ? "Run archived" : "Run restored", at: run.updatedAt });
     } else if (match[2] === "cancel") {
       cancelRun(run);
+      runControllers.get(run.id)?.abort();
       const child = processes.get(run.id);
       stopChild(child);
     } else if (match[2] === "retry") {
@@ -619,7 +622,7 @@ const mime = {
   ".webmanifest": "application/manifest+json; charset=utf-8",
 };
 
-export const controlServer = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   try {
     const localOrigins = [`http://127.0.0.1:${req.socket.localPort}`, `http://localhost:${req.socket.localPort}`];
     const origin = `http://${req.headers.host}`;
@@ -649,8 +652,17 @@ export const controlServer = createServer(async (req, res) => {
     if (!file.startsWith(`${publicDir}${path.sep}`)) return send(res, 403, "Forbidden", "text/plain");
     send(res, 200, await readFile(file, "utf8"), mime[path.extname(file)] || "text/plain; charset=utf-8");
   } catch (error) {
-    send(res, 400, { error: error.message });
+    if (!res.destroyed && !res.headersSent) send(res, 400, { error: error.message });
+    else if (!res.destroyed) res.destroy();
   }
+}
+
+export const controlServer = createServer((req,res) => {
+  requestBodies.add(req);
+  const pending = handleRequest(req,res);
+  requestJobs.add(pending);
+  const done=()=>{requestJobs.delete(pending);requestBodies.delete(req);};
+  pending.then(done,error=>{done();console.error(error);});
 });
 
 export const serverReady = (async () => {
@@ -670,7 +682,7 @@ export const serverReady = (async () => {
       const active = [...runs.values()].filter(run => run.executions?.at(-1)?.status === 'running');
       if (!active.length) return;
       for (const run of active) { checkpointExecution(run.executions.at(-1)); touchRun(run); }
-      void saveJson(dataFile, [...runs.values()]).then(() => active.forEach(emitRun)).catch(error => console.error(error));
+      void runWriter.flush().then(() => active.forEach(emitRun)).catch(error => console.error(error));
     }, 5000);
     drainQueue();
     const actualPort = controlServer.address().port;
@@ -687,14 +699,18 @@ export function shutdown() {
   clearInterval(checkpointTimer);
   shutdownPromise = (async () => {
     controlServer.close();
-    await auth.shutdown();
-    for (const client of eventClients) client.end();
+    const authShutdown=auth.shutdown();
+    const eventsShutdown=eventHub.close();
     controlServer.closeIdleConnections();
+    shutdownController.abort();
+    for (const controller of runControllers.values()) controller.abort();
+    for (const req of requestBodies) if (!req.complete) req.destroy();
     for (const run of runs.values()) {
       if (run.starting && ["queued", "running", "approved"].includes(run.state)) cancelRun(run);
     }
     for (const child of processes.values()) stopChild(child);
-    await Promise.allSettled([...jobs]);
+    await Promise.allSettled([authShutdown,eventsShutdown,...jobs,...requestJobs]);
+    await gitRunner.shutdown();
     if (ready) await persist();
     runPublisher.clear();
   })();

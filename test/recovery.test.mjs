@@ -14,8 +14,9 @@ test('Runner startup restores interrupted reports and timing from the last saved
   const dir=await mkdtemp(path.join(tmpdir(),'ccp-recovery-'));
   const run=createRun({id:'interrupted',repository:dir,prompt:'saved task'});
   run.state='running';run.revision=20;run.runnerId='old-instance';
+  const pending=createRun({id:'pending-create',repository:dir,prompt:'Unconfirmed creation'});pending.creationPending=true;
   const entry=beginExecution(run,1000);appendReport(run,entry,'重启前的部分报告');checkpointExecution(entry,7000);
-  await writeFile(path.join(dir,'runs.json'),JSON.stringify([run]));
+  await writeFile(path.join(dir,'runs.json'),JSON.stringify([run,pending]));
   const child=spawn(process.execPath,['server.mjs'],{cwd:fileURLToPath(new URL('..',import.meta.url)),env:{...process.env,PORT:'0',CODEX_CONTROL_PLANE_DATA_DIR:dir},stdio:['ignore','pipe','pipe']});
   const done=once(child,'exit');let output='';child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>output+=c);
   t.after(async()=>{child.kill('SIGTERM');await done;await rm(dir,{recursive:true,force:true});});
@@ -27,4 +28,7 @@ test('Runner startup restores interrupted reports and timing from the last saved
   assert.equal(restored.executions[0].status,'interrupted');assert.equal(restored.usage.durationMs,6000);
   assert.notEqual(restored.runnerId,'old-instance');assert.ok(restored.revision>20);
   assert.equal(JSON.parse(await readFile(path.join(dir,'runs.json'),'utf8'))[0].executions[0].status,'interrupted');
+  const unconfirmed=await fetch(url+'/api/runs/pending-create').then(r=>r.json());
+  assert.equal(unconfirmed.state,'failed');assert.match(unconfirmed.error,/creation was interrupted/);assert.equal(unconfirmed.creationPending,undefined);
+  assert.equal((await fetch(url+'/api/health').then(r=>r.json())).activeJobs,0);
 });

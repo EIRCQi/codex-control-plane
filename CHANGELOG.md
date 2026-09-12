@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 — 2026-09-12
+
+- Coalesce run persistence into one active snapshot and one follow-up batch. Capture/serialize only when a batch starts, acknowledge requests after the covering write, and let subsequent saves recover after failures. Existing atomic JSON writes and file formats remain in use.
+- Serialize project/template read-modify-write transactions and commit in-memory collections only after a successful save. Deep-cloned drafts prevent partial changes and concurrent lost updates. Newly created runs stay invisible to scheduling until their first save succeeds; interrupted creation records recover as failed for manual review. Persist worktree baseline/path metadata before running `git worktree add`.
+- Introduce an SSE hub with backpressure handling, per-run coalescing, stale-run removal after a newer snapshot, one shared heartbeat and no event serialization without subscribers. Allow up to 32 clients; disconnect stalled clients after 10 seconds without drain or when queued frames exceed 2 MiB plus the largest queued frame. One large frame is allowed so existing large snapshots can drain. The SSE event schema is unchanged; clients reconnect for current state.
+- Add managed Git subprocesses with a default 120-second deadline, a 16 MiB stdout ceiling, bounded 64 KiB stderr, complete UTF-8 decoding, cancellation and shutdown tracking. Reject over-limit output entirely. POSIX commands use owned process groups; Windows requests tree termination through its system `taskkill` utility, with forced termination/pipe cleanup after the grace period. Timed-out Git writes still require repository inspection before retrying. Configure the deadline with `CODEX_CONTROL_PLANE_GIT_TIMEOUT_MS`.
+- Wait for in-flight request handlers, owned commands and final persistence during shutdown, and stop incomplete HTTP request bodies. Add queue/job/Git/connection counts to health responses. Preserve known timeout/cancellation causes instead of presenting them as a missing branch, remote or initial commit.
+- Add backpressure, write-coalescing, transaction-failure, process-limit and HTTP Git-cancellation coverage. Extend real HTTP/Git tests with failed project/template/task saves and recovery of interrupted task creation. Keep the existing approval and budget rules.
+
+All 119 local Node tests pass, with syntax checks for 40 scripts and local import/diff validation. No dependency additions, manual data migration or installer publication. Validation uses local fixtures and subprocesses; it does not exercise paid model calls or native desktop UI.
+
 ## 0.8.0 — 2026-09-12
 
 - Split the long dashboard into mounted workspace pages for tasks, projects, usage, environment, settings and sign-in/help. Added hash navigation, direct page entry, browser history handling and per-page scroll restoration without rebuilding forms. The task page now shows a compact readiness guide, a failed-task metric, clearer status accents and a saved list-density choice.

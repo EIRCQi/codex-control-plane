@@ -19,6 +19,9 @@ jobs:
           node-version: 22
       - run: node --test
       - run: node --check server.mjs
+      - run: node --check lib/storage.mjs
+      - run: node --check lib/commands.mjs
+      - run: node --check lib/event-hub.mjs
       - run: node --check electron.mjs
       - run: node --check public/app.js
       - run: node --check public/task-composer.js

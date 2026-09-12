@@ -99,6 +99,28 @@ if (args.at(-1).includes('gated quota')) {
   } finally { await rm(settingsPath,{recursive:true,force:true});await rename(settingsPath+'.saved',settingsPath); }
 
   const emptyRepo=path.join(dir,'empty');await mkdir(emptyRepo);execFileSync('git',['init','-q'],{cwd:emptyRepo});
+  const blockWrites=async(file,work)=>{
+    await rename(file,file+'.saved');await mkdir(file);
+    try {await work();} finally {await rm(file,{recursive:true,force:true});await rename(file+'.saved',file);}
+  };
+  const savedProjects=await request('/api/projects').then(r=>r.json());
+  await blockWrites(path.join(data,'projects.json'),async()=>{
+    assert.equal((await request('/api/projects','POST',{name:'Unsaved project',repository:emptyRepo})).status,400);
+    assert.equal((await request(`/api/projects/${savedProjects[0].id}`,'DELETE')).status,400);
+    assert.deepEqual(await request('/api/projects').then(r=>r.json()),savedProjects);
+  });
+  const savedTemplate=await request('/api/templates','POST',{name:'Saved template',prompt:'Review {{task}}'}).then(r=>r.json());
+  const savedTemplates=await request('/api/templates').then(r=>r.json());
+  await blockWrites(path.join(data,'templates.json'),async()=>{
+    assert.equal((await request('/api/templates','POST',{name:'Unsaved template',prompt:'Fix {{task}}'})).status,400);
+    assert.equal((await request(`/api/templates/${savedTemplate.id}`,'DELETE')).status,400);
+    assert.deepEqual(await request('/api/templates').then(r=>r.json()),savedTemplates);
+  });
+  await blockWrites(path.join(data,'runs.json'),async()=>{
+    assert.equal((await request('/api/runs','POST',{repository:repo,prompt:'Must not execute after a failed save'})).status,400);
+    assert.equal((await request('/api/runs').then(r=>r.json())).length,1);
+    assert.equal((await request('/api/health').then(r=>r.json())).activeJobs,0);
+  });
   const emptyResult=await request('/api/runs','POST',{repository:emptyRepo,prompt:'No commit yet'});
   assert.equal(emptyResult.status,400);assert.match((await emptyResult.json()).error,/initial Git commit/);
 
