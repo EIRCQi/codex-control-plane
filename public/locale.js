@@ -63,6 +63,12 @@ const messages = new Map([
   ['Only finished runs can be archived', '只能归档已结束的任务。'],
   ['Run is not awaiting approval', '当前任务不处于等待写入审批的状态。'],
   ['Run is not awaiting change approval', '当前任务不处于等待变更审批的状态。'],
+  ['Previous apply needs recovery before continuing', '上次应用结果尚未确认，请先点击“核对应用结果”。'],
+  ['No pending apply recovery record', '没有需要恢复的应用记录，请刷新任务状态。'],
+  ['Apply outcome needs verification; use Reconcile apply before continuing', '应用操作已中断，请点击“核对应用结果”；代码可能已经写入原仓库。'],
+  ['Apply outcome is uncertain; preserve your files, inspect the repository and reconcile again', '原仓库与已批准的结果不一致。请保留现有文件并检查差异，然后再次点击“核对应用结果”。'],
+  ['Apply recovery record does not match this task; inspect the repository', '恢复记录与当前任务不匹配，请保留原仓库并检查任务数据。'],
+  ['Apply recovery task has an unexpected state; inspect the repository', '待恢复任务的状态异常，请先检查原仓库。'],
   ['Read-only reviews cannot request write access', '只读审查不能申请写入权限。'],
   ['Read-only reviews cannot be implemented', '只读审查不能进入实施阶段。'],
   ['Read-only reviews cannot propose changes', '只读审查不能提交待审批变更。'],
@@ -100,6 +106,7 @@ const messages = new Map([
 ]);
 
 const patterns = [
+  [/^Apply outcome needs verification; use Reconcile apply before continuing: ([\s\S]+)$/, error => `应用结果尚未确认，请点击“核对应用结果”。代码可能已经写入原仓库。详细信息：${error}`],
   [/^Git command timed out after (\d+) ms; inspect the repository before retrying$/, ms => `Git 操作超过 ${Number(ms) / 1000} 秒，已停止。请先检查仓库状态，再决定是否重试。`],
   [/^Git output exceeded (\d+) bytes; no partial result was accepted$/, bytes => `Git 输出超过 ${Number(bytes) / 1024 / 1024} MiB，操作已停止；不会使用不完整的结果。请缩小变更范围后重试。`],
   [/^Git input failed: (.+)$/, code => `Git 输入写入失败：${code}`],

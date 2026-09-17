@@ -1,6 +1,6 @@
 // A TCP connection alone does not mean the Runner is responding. Require a
 // snapshot and watch the server heartbeat, including after laptop sleep.
-export function createLiveConnection({ onStatus, onSnapshot, onRun, onAuth, onCatalog, onSettings, onSession, onReady,
+export function createLiveConnection({ onStatus, onSnapshot, onRun, onAuth, onCatalog, onSettings, onUsage, onSession, onReady,
   Source = EventSource, now = Date.now, schedule = setInterval, unschedule = clearInterval, timeoutMs = 45000 }) {
   let source, lastSeen = 0, awaitingSince = 0, broken = false, connected = false, timer, stopped = true;
   function status(value) {
@@ -26,6 +26,7 @@ export function createLiveConnection({ onStatus, onSnapshot, onRun, onAuth, onCa
     listen('session', onSession);
     listen('run', onRun); listen('auth', onAuth);
     listen('catalog', onCatalog); listen('settings', onSettings);
+    listen('usage',onUsage);
     listen('heartbeat');
     active.onerror = () => { if (!stopped && source === active) { if (connected) awaitingSince = now(); status(false); } };
     if (timer === undefined) timer = schedule(() => {

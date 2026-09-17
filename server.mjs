@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
-import { aggregateUsage, emptyUsage, recordUsage } from "./lib/usage.mjs";
+import { emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson, createSnapshotWriter, createCollectionWriter } from "./lib/storage.mjs";
 import { diagnose, resolveTool, runtimeEnvironment, runtimeDefaults, validateRuntimeSettings } from "./lib/runtime.mjs";
@@ -18,6 +18,10 @@ import { defaultSettings, validateSettings, budgetReason } from './lib/budget.mj
 import { beginExecution, checkpointExecution, appendReport, appendDiagnostic, finishExecution, recoverExecutions, createLineReader, parseCodexLine } from './lib/execution.mjs';
 import { createEventHub } from './lib/event-hub.mjs';
 import { createCommandRunner } from './lib/commands.mjs';
+import { manageProcessTree, ownedProcessOptions } from './lib/process-tree.mjs';
+import { acquireDataLock } from './lib/data-lock.mjs';
+import { createUsageLedger } from './lib/usage-ledger.mjs';
+import { createApplyJournal, expectedApplyTree, inspectApplyResult } from './lib/apply-journal.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -30,6 +34,7 @@ const appVersion = JSON.parse(await readFile(path.join(root, "package.json"), "u
 const runnerEnv = runtimeEnvironment();
 const runnerId = randomUUID();
 let checkpointTimer;
+let releaseDataLock, usageLedger, applyJournal;
 let runtimeSettings = { ...runtimeDefaults };
 let diagnosticsPromise = null;
 const templatesFile = path.join(dataDir, "templates.json");
@@ -53,8 +58,13 @@ let customTemplates = [];
 let settings = { ...defaultSettings };
 const visibleRuns = () => [...runs.values()].filter(run => !creatingRuns.has(run.id));
 const runWriter = createSnapshotWriter(
-  () => [...runs.values()].map(run => creatingRuns.has(run.id) ? {...run, creationPending:true} : run),
-  value => saveJson(dataFile, value),
+  () => structuredClone([...runs.values()].map(run => creatingRuns.has(run.id) ? {...run, creationPending:true} : run)),
+  async value => {
+    // Ledger first: a crash or a later history deletion must not refund usage.
+    usageLedger.observeAll(value.filter(run=>!run.creationPending));
+    await usageLedger.flush();
+    await saveJson(dataFile, value);
+  },
 );
 const updateProjects = createCollectionWriter({
   read:() => projects,
@@ -76,8 +86,9 @@ const auth = createAuthManager({
 });
 
 async function initialize() {
-  await mkdir(dataDir, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
+  usageLedger=await createUsageLedger(path.join(dataDir,'usage-ledger.json'));
+  applyJournal=await createApplyJournal(path.join(dataDir,'apply-journal.json'));
   settings = validateSettings({ ...defaultSettings, ...await loadJson(settingsFile, {}, (v) => v && !Array.isArray(v) && typeof v === "object") });
   for (const project of await loadJson(projectsFile, [], Array.isArray)) projects.set(project.id, project);
   customTemplates = await loadJson(templatesFile, [], Array.isArray);
@@ -110,10 +121,18 @@ async function initialize() {
       runs.set(run.id, run);
     }
   }
+  usageLedger.observeAll(runs.values());
+  for(const entry of applyJournal.all()) {
+    const run=runs.get(entry.runId);
+    if(!run)throw new Error('An apply recovery record has no matching task; original data preserved');
+    try {await recoverApply(run);}
+    catch(error){run.applyRecovery=true;run.error=error.message;}
+  }
+  for(const run of runs.values())if(run.applyRecovery && !applyJournal.get(run.id))delete run.applyRecovery;
 }
 
 function writeRun(run) {
-  if (!creatingRuns.has(run.id) && runs.has(run.id)) broadcast('run',run);
+  if (!creatingRuns.has(run.id) && runs.has(run.id)) {usageLedger.observe(run);broadcast('run',run);broadcastUsage();}
 }
 
 const runPublisher = createRunPublisher(writeRun);
@@ -123,7 +142,7 @@ async function persist(run) {
   if (run) touchRun(run);
   await runWriter.flush();
   if (run) emitRun(run);
-  else broadcast('snapshot',visibleRuns());
+  else {broadcast('snapshot',visibleRuns());broadcastUsage();}
 }
 
 function broadcast(type, value) {
@@ -134,8 +153,11 @@ function broadcast(type, value) {
 const allTemplates = () => [...builtInTemplates, ...customTemplates];
 
 function repositoryTokens(repository) {
-  return [...runs.values()].filter((run) => run.repository === repository).reduce((sum, run) => sum + (run.usage?.totalTokens || 0), 0);
+  return usageLedger.repositoryTokens(repository);
 }
+
+function usageSummary(){const list=visibleRuns();usageLedger.observeAll(list);return usageLedger.summary(list);}
+function broadcastUsage(){broadcast('usage',usageSummary());}
 
 async function jsonBody(req) {
   let raw = "";
@@ -171,7 +193,7 @@ async function validateRepository(input) {
   return resolved;
 }
 
-const git = async (cwd,args,input,{run,cleanup=false}={}) => gitRunner.run(await resolveTool('git',runtimeSettings,runnerEnv),args,{cwd,input,signal:cleanup ? undefined : runControllers.get(run?.id)?.signal || shutdownController.signal});
+const git = async (cwd,args,input,{run,cleanup=false,env}={}) => gitRunner.run(await resolveTool('git',runtimeSettings,runnerEnv),args,{cwd,input,env,signal:cleanup ? undefined : runControllers.get(run?.id)?.signal || shutdownController.signal});
 
 async function createWorktree(run, { preserveBaseline = false } = {}) {
   if (preserveBaseline) requireBaseline(run);
@@ -215,14 +237,7 @@ async function resetWorktree(run, {cleanup=false}={}) {
   await git(run.worktree, ["clean", "-fd"],undefined,{run,cleanup});
 }
 
-function stopChild(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null || child.stopTimer) return;
-  child.kill("SIGTERM");
-  child.stopTimer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }, 3000);
-  child.once("close", () => clearTimeout(child.stopTimer));
-}
+function stopChild(scope) {if(scope)void scope.stop();}
 
 async function executeCodex(run, sandbox, prompt) {
   const executable = await resolveTool("codex", runtimeSettings, runnerEnv);
@@ -241,12 +256,13 @@ async function executeCodex(run, sandbox, prompt) {
     let child;
     try {
       child = spawn(executable, ["exec", "--sandbox", sandbox, "--json", prompt], {
-        cwd: run.worktree, env: runnerEnv, windowsHide:true, stdio: ["ignore", "pipe", "pipe"],
+        cwd: run.worktree, env: runnerEnv, ...ownedProcessOptions, stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
       finishExecution(run, entry, 'failed', {error:error.message}); reject(error); return;
     }
-    processes.set(run.id, child);
+    const scope=manageProcessTree(child,{env:runnerEnv});
+    processes.set(run.id, scope);
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     let spawnError = null, protocolError = null;
     const log = (type, message) => {
@@ -257,7 +273,11 @@ async function executeCodex(run, sandbox, prompt) {
     };
     const output = createLineReader(line => {
       const {event, plain} = parseCodexLine(line);
-      if (recordUsage(run, event, entry.seq)) enforceBudget(run);
+      if (recordUsage(run, event, entry.seq)) {
+        usageLedger.observe(run);
+        const stopped=[...runs.values()].filter(candidate=>candidate.repository===run.repository).filter(enforceBudget);
+        void persist(stopped.length ? undefined : run).catch(error=>console.error(error));
+      }
       if (plain) appendReport(run, entry, line);
       else if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') appendReport(run, entry, event.item.text);
       if (event.type === 'turn.failed') protocolError = event.error?.message || 'Codex turn failed';
@@ -269,7 +289,7 @@ async function executeCodex(run, sandbox, prompt) {
     child.stdout.on('data', chunk => output.write(chunk));
     child.stderr.on('data', chunk => { appendDiagnostic(entry, chunk); diagnostics.write(chunk); });
     child.on('error', error => { spawnError = error; });
-    child.on('close', code => {
+    void scope.wait().then(({code}) => {
       processes.delete(run.id); output.end(); diagnostics.end();
       const error = spawnError?.message || protocolError || (code === 0 ? null : entry.diagnostics.trim() || `Codex exited with code ${code}`);
       const status = run.budgetExceeded ? 'budget_exceeded' : run.cancelRequested ? 'cancelled' : error ? 'failed' : 'completed';
@@ -336,21 +356,52 @@ async function implement(run) {
 }
 
 async function applyChanges(run) {
+  if (applyJournal.get(run.id))throw new Error('Previous apply needs recovery before continuing');
   if (run.state !== "awaiting_merge") throw new Error("Run is not awaiting change approval");
   await verifyRepositoryBaseline(run);
   await git(run.repository, ["apply", "--check", "--index", "-"], run.diff);
-  await git(run.repository, ["apply", "--index", "--whitespace=nowarn", "-"], run.diff);
-  applyRun(run);
-  await persist(run);
+  const expectedTree=await expectedApplyTree(run,{git,dataDir});
+  await applyJournal.prepare(run,expectedTree);
+  try {
+    await verifyRepositoryBaseline(run);
+    await git(run.repository, ["apply", "--index", "--whitespace=nowarn", "-"], run.diff);
+    await finishApply(run);
+  }catch(error){
+    run.applyRecovery=true;run.error='Apply outcome needs verification; use Reconcile apply before continuing';
+    touchRun(run);emitRun(run);
+    throw new Error(`${run.error}: ${error.message}`);
+  }
+}
+
+async function finishApply(run) {
+  if(run.state!=='completed')applyRun(run);
+  delete run.applyRecovery;run.error=null;
+  await persist(run); // Completion must be durable before discarding the intent.
   try { await cleanupWorktree(run); }
   catch (error) { run.error = `Changes applied; worktree cleanup failed: ${error.message}`; }
   await persist(run);
+  await applyJournal.remove(run.id);
+}
+
+async function recoverApply(run) {
+  const entry=applyJournal.get(run.id);
+  if(!entry)throw new Error('No pending apply recovery record');
+  if(!applyJournal.matches(entry,run))throw new Error('Apply recovery record does not match this task; inspect the repository');
+  if(run.state==='completed')return finishApply(run);
+  if(run.state!=='awaiting_merge')throw new Error('Apply recovery task has an unexpected state; inspect the repository');
+  const outcome=await inspectApplyResult(entry,{git});
+  if(outcome==='applied')return finishApply(run);
+  if(outcome==='uncertain')throw new Error('Apply outcome is uncertain; preserve your files, inspect the repository and reconcile again');
+  delete run.applyRecovery;run.error=null;
+  await persist(run);
+  await applyJournal.remove(run.id);
 }
 
 async function checkChanges(run) {
   const result = {runId:run.id, revision:run.revision, checkedAt:new Date().toISOString(), canApply:false};
   try {
     if (run.state !== 'awaiting_merge') throw new Error('Run is not awaiting change approval');
+    if (applyJournal.get(run.id))throw new Error('Previous apply needs recovery before continuing');
     if (run.starting) throw new Error('Run is still active or stopping; try again shortly');
     await verifyRepositoryBaseline(run);
     await git(run.repository, ['apply', '--check', '--index', '-'], run.diff);
@@ -466,6 +517,7 @@ async function api(req, res, url) {
     client.enqueue('retry','retry: 1500\n\n');
     client.send('session',{runnerId});
     client.send('snapshot',visibleRuns());
+    client.send('usage',usageSummary());
     client.send('auth',auth.snapshot());
     return;
   }
@@ -485,15 +537,17 @@ async function api(req, res, url) {
   if (req.method === "DELETE" && runMatch) {
     const run = runs.get(runMatch[1]);
     if (!run) return send(res, 404, { error: "Run not found" });
+    if (applyJournal.get(run.id))throw new Error('Previous apply needs recovery before continuing');
     if (!terminalStates.has(run.state)) throw new Error("Only completed, failed, cancelled, discarded or budget-limited runs can be deleted");
     if (run.starting || processes.has(run.id)) throw new Error("Run is still stopping; wait before deleting");
     await cleanupWorktree(run);
+    usageLedger.observe(run);await usageLedger.flush();
     runs.delete(run.id);
-    await persist();
+    try {await persist();}catch(error){runs.set(run.id,run);throw error;}
     return send(res, 200, { deleted: true });
   }
   if (req.method === "GET" && url.pathname === "/api/usage") {
-    return send(res, 200, aggregateUsage([...runs.values()]));
+    return send(res, 200, usageSummary());
   }
   if (req.method === "GET" && url.pathname === "/api/settings") {
     return send(res, 200, settings);
@@ -575,10 +629,11 @@ async function api(req, res, url) {
     drainQueue();
     return send(res, 202, run);
   }
-  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|discard|cancel|retry|archive|unarchive)$/);
+  const match = url.pathname.match(/^\/api\/runs\/([^/]+)\/(approve|reject|apply|reconcile|discard|cancel|retry|archive|unarchive)$/);
   if (req.method === "POST" && match) {
     const run = runs.get(match[1]);
     if (!run) return send(res, 404, { error: "Run not found" });
+    if(applyJournal.get(run.id) && match[2]!=='reconcile')throw new Error('Previous apply needs recovery before continuing');
     if (run.starting && match[2] !== "cancel") throw new Error("Run is still active or stopping; try again shortly");
     if (run.mode === "review" && ["approve", "apply"].includes(match[2])) throw new Error("Read-only reviews cannot request write access");
     if (match[2] === "archive" || match[2] === "unarchive") {
@@ -599,8 +654,13 @@ async function api(req, res, url) {
     } else if (match[2] === "discard") {
       discardRun(run);
       await cleanupWorktree(run);
+    } else if (match[2] === 'reconcile') {
+      try {await recoverApply(run);}
+      catch(error){run.applyRecovery=true;run.error=error.message;await persist(run);throw error;}
+      return send(res,202,run);
     } else if (match[2] === "apply") {
       await applyChanges(run);
+      return send(res,202,run);
     } else {
       const reason = budgetReason(run, settings, repositoryTokens(run.repository));
       if (reason) throw new Error(reason);
@@ -674,7 +734,10 @@ export const serverReady = (async () => {
     });
   });
   try {
+    releaseDataLock=await acquireDataLock(dataDir);
+    if(stopping)throw new Error('Runner is stopping');
     await initialize();
+    if(stopping)throw new Error('Runner is stopping');
     await persist();
     ready = true;
     checkpointTimer = setInterval(() => {
@@ -689,7 +752,7 @@ export const serverReady = (async () => {
     const url = `http://127.0.0.1:${actualPort}`;
     console.log(`Codex Control Plane: ${url}`);
     return { port: actualPort, url };
-  } catch (error) { controlServer.close(); throw error; }
+  } catch (error) {controlServer.close();await releaseDataLock?.();releaseDataLock=null;throw error;}
 })();
 
 let shutdownPromise;
@@ -698,6 +761,7 @@ export function shutdown() {
   stopping = true;
   clearInterval(checkpointTimer);
   shutdownPromise = (async () => {
+    await serverReady.catch(()=>{});
     controlServer.close();
     const authShutdown=auth.shutdown();
     const eventsShutdown=eventHub.close();
@@ -711,8 +775,8 @@ export function shutdown() {
     for (const child of processes.values()) stopChild(child);
     await Promise.allSettled([authShutdown,eventsShutdown,...jobs,...requestJobs]);
     await gitRunner.shutdown();
-    if (ready) await persist();
-    runPublisher.clear();
+    try {if (ready) await persist();}
+    finally {runPublisher.clear();await releaseDataLock?.();releaseDataLock=null;}
   })();
   return shutdownPromise;
 }

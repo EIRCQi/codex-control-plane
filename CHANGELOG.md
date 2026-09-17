@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.1 — 2026-09-17
+
+- Share process cleanup between Codex execution and Git commands. On POSIX, signal owned process groups and escalate after three seconds even if the leader exits first. Wait for descendant cleanup and final output before reusing a task/worktree. On Windows, request tree termination through system `taskkill /T /F` while the leader is running. Deliberately detached processes outside these groups/trees are outside this mechanism.
+- Save an apply intent before changing the source index/worktree. Compute the expected Git tree in a private index and retain the approved patch fingerprint. Reconcile pending intents on startup: recover completed results, return untouched baselines for fresh approval, and preserve conflicting work for inspection. Add a Chinese “核对应用结果” action; block further apply/discard/history deletion while an outcome is unresolved. Existing tasks without an intent are not retroactively assumed to have been applied.
+- Add `usage-ledger.json` with cumulative per-run usage, monotonic reconciliation and a repository total index. Save ledger entries before history snapshots/deletion; deleting history cannot refund quota. A repository usage event checks all active/queued runs in that repository. Publish cumulative usage over SSE and `/api/usage`, including retained usage from deleted history. Bootstrap from existing records without double counting; previously deleted records cannot be reconstructed.
+- Acquire an atomic data-directory owner lock before loading or saving state. Reject another Runner even on a different port; verify ownership on release and recover locks only for a confirmed dead process on the same host. Preserve malformed/unknown owners. Older versions do not participate in this lock, so stop them before upgrading.
+- Add regressions for resistant descendants with inherited/ignored pipes, failed apply/history saves and restart, uncertain recovery with extra edits, deleted-history quota retention, concurrent repository limits, duplicate Runners and stale-lock recovery. No added dependencies or paid model calls; native desktop UI and real-account execution remain unverified.
+
+All 134 local Node tests pass; 44 runtime/browser scripts pass syntax and relative-import checks, with a clean Git whitespace check.
+
 ## 0.9.0 — 2026-09-12
 
 - Coalesce run persistence into one active snapshot and one follow-up batch. Capture/serialize only when a batch starts, acknowledge requests after the covering write, and let subsequent saves recover after failures. Existing atomic JSON writes and file formats remain in use.

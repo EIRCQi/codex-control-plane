@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createApplyJournal,expectedApplyTree,inspectApplyResult} from '../lib/apply-journal.mjs';
+import {createCommandRunner} from '../lib/commands.mjs';
+import {resolveTool} from '../lib/runtime.mjs';
+
+test('recovery distinguishes an unapplied, applied and conflicting binary/text patch without changing files',async t=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'ccp-apply-')),repo=path.join(dir,'repo');await mkdir(repo);
+  const runner=createCommandRunner(),executable=await resolveTool('git');
+  const git=(cwd,args,input,options={})=>runner.run(executable,args,{cwd,input,...options});
+  const g=(...args)=>git(repo,args);
+  t.after(async()=>{await runner.shutdown();await rm(dir,{recursive:true,force:true});});
+  await g('init','-q');await g('config','user.name','Test');await g('config','user.email','test@example.invalid');
+  await writeFile(path.join(repo,'file.txt'),'before\n');await writeFile(path.join(repo,'binary.bin'),Buffer.from([0,1,2,3]));
+  await g('add','.');await g('commit','-qm','Initial');
+  const baseHead=(await g('rev-parse','HEAD')).trim(),baseRef=(await g('symbolic-ref','HEAD')).trim();
+  await writeFile(path.join(repo,'file.txt'),'after\n');await writeFile(path.join(repo,'binary.bin'),Buffer.from([0,3,4,5]));
+  const diff=await g('diff','--binary','--no-ext-diff','--no-textconv','--src-prefix=a/','--dst-prefix=b/',baseHead,'--');
+  await g('reset','--hard',baseHead);
+  const run={id:'run',repository:repo,baseHead,baseRef,diff};
+  const expectedTree=await expectedApplyTree(run,{git,dataDir:dir});
+  assert.equal((await g('status','--porcelain')).trim(),'');
+  const file=path.join(dir,'apply.json'),journal=await createApplyJournal(file);await journal.prepare(run,expectedTree);
+  const restored=await createApplyJournal(file),entry=restored.get('run');assert.ok(restored.matches(entry,run));
+  assert.equal(restored.matches(entry,{...run,diff:diff+'x'}),false);
+  assert.equal(await inspectApplyResult(entry,{git}),'not_applied');
+  await git(repo,['apply','--index','-'],diff);assert.equal(await inspectApplyResult(entry,{git}),'applied');
+  await writeFile(path.join(repo,'file.txt'),'user work\n');assert.equal(await inspectApplyResult(entry,{git}),'uncertain');
+  assert.equal(await readFile(path.join(repo,'file.txt'),'utf8'),'user work\n');
+});

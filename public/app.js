@@ -34,6 +34,7 @@ let renderedDetailRun = null;
 let projects = [];
 let templates = [];
 let usageLimit = 30;
+let cumulativeUsage = null;
 let renderedUsageKey = '';
 let catalogGeneration = 0;
 let settingsGeneration = 0;
@@ -141,10 +142,10 @@ function readFilters() {
 }
 
 function renderUsage(runs) {
-  const key = `${usageLimit}:${usageKey(runs)}`;
+  const key = `${usageLimit}:${cumulativeUsage?.revision}:${cumulativeUsage?.retainedRuns}:${usageKey(runs)}`;
   if (key === renderedUsageKey) return;
   renderedUsageKey = key;
-  const total = runs.reduce((sum, run) => {
+  const total = cumulativeUsage ? {input:cumulativeUsage.inputTokens,cached:cumulativeUsage.cachedInputTokens,output:cumulativeUsage.outputTokens,tokens:cumulativeUsage.totalTokens,duration:cumulativeUsage.durationMs,models:cumulativeUsage.models} : runs.reduce((sum, run) => {
     const usage = run.usage || {};
     sum.input += usage.inputTokens || 0;
     sum.cached += usage.cachedInputTokens || 0;
@@ -169,7 +170,7 @@ function renderUsage(runs) {
   const rows = measured.slice(0, usageLimit).map((run) => `<tr><td title="${escapeHtml(taskTitle(run))}"><button class="text-button detail-run" data-id="${escapeHtml(run.id)}">${escapeHtml(taskTitle(run).slice(0, 42))}</button></td><td>${escapeHtml(run.usage.model || "—")}</td><td>${formatTokens(run.usage.inputTokens)}</td><td>${formatTokens(run.usage.cachedInputTokens)}</td><td>${formatTokens(run.usage.outputTokens)}</td><td><strong>${formatTokens(run.usage.totalTokens)}</strong></td><td>${formatDuration(run.usage.durationMs)}</td></tr>`).join("");
   document.querySelector("#usage-rows").innerHTML = rows || '<tr><td colspan="7" class="no-usage">Codex 返回首条用量事件后，这里会显示统计。</td></tr>';
   document.querySelector('#usage-more').hidden = usageLimit >= measured.length;
-  document.querySelector('#usage-count').textContent = measured.length ? `显示 ${Math.min(usageLimit, measured.length)} / ${measured.length} 条用量记录，汇总包含全部任务` : '';
+  document.querySelector('#usage-count').textContent = `显示 ${Math.min(usageLimit, measured.length)} / ${measured.length} 条现存用量记录；汇总保留已删除历史的用量${cumulativeUsage?.retainedRuns ? `（${cumulativeUsage.retainedRuns} 条）` : ''}`;
 }
 
 function showError(message) {
@@ -252,7 +253,7 @@ async function action(id, type) {
     document.querySelector("#operation-error").hidden = true;
     document.querySelector("#detail-error").textContent = "";
     acceptRun(updated);
-    const messages = {approve:"已批准实施", reject:"已拒绝写入", apply:"变更已应用到原仓库", discard:"变更已丢弃", cancel:"已请求取消", retry:"重试已加入队列", archive:"任务已归档", unarchive:"任务已恢复"};
+    const messages = {approve:"已批准实施", reject:"已拒绝写入", apply:"变更已应用到原仓库", reconcile:"已核对应用结果，请查看任务状态", discard:"变更已丢弃", cancel:"已请求取消", retry:"重试已加入队列", archive:"任务已归档", unarchive:"任务已恢复"};
     notify(messages[type] || "任务已更新", type === "archive" ? {action:{label:"撤销",run:()=>action(id,"unarchive")}} : {});
     return true;
   } finally { pendingActions.delete(id); updatePendingButtons(); }
@@ -328,6 +329,7 @@ function openRunDetail(run) {
 
 function detailActions(run) {
   const button = (op,label,primary=false) => `<button type="button" class="${primary ? 'primary' : 'secondary'}" data-id="${escapeHtml(run.id)}" data-run-action="${op}">${label}</button>`;
+  if(run.applyRecovery)return button('reconcile','核对应用结果',true);
   if (run.state === 'awaiting_approval') return button('reject','拒绝') + button('approve','批准并执行',true);
   if (run.state === 'awaiting_merge') return button('discard','丢弃变更') + button('apply','应用到原仓库',true);
   if (['running','queued','approved'].includes(run.state)) return button('cancel','取消任务');
@@ -726,8 +728,9 @@ const connection = createLiveConnection({
   onAuth: state => onboarding.accept(state),
   onCatalog: acceptCatalog,
   onSettings: acceptSettings,
+  onUsage(value){cumulativeUsage=value;renderUsage(currentRuns);},
   onSession(session) {
-    if (runnerInstance !== session.runnerId) deletedRuns.clear();
+    if (runnerInstance !== session.runnerId) {deletedRuns.clear();cumulativeUsage=null;renderedUsageKey='';}
     runnerInstance = session.runnerId;
   },
   onReady: () => { void Promise.all([loadSettings(), loadCatalog(), environment.refresh()]).catch(() => {}); },
