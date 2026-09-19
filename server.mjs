@@ -5,7 +5,7 @@ import { access, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, stageActivation, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
 import { emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson, createSnapshotWriter, createCollectionWriter } from "./lib/storage.mjs";
@@ -100,6 +100,7 @@ async function initialize() {
       run.mode ||= "implement";
       run.logs ||= [];
       run.events ||= [];
+      if (restoreActivation(run)) run.events.push({type:'run.activation_recovered', message:'Unconfirmed approval or retry restored; confirm the action again', at:run.updatedAt});
       run.retries ||= 0;
       run.executionSeq ||= 0;
       run.runnerId = runnerId;
@@ -243,8 +244,20 @@ async function verifyRepositoryBaseline(run) {
 
 async function resetWorktree(run, {cleanup=false}={}) {
   requireBaseline(run);
+  const expected = path.resolve(worktreeRoot, run.id);
+  if (path.dirname(expected) !== path.resolve(worktreeRoot) || !run.worktree || path.resolve(run.worktree) !== expected) {
+    throw new Error('Worktree does not belong to this task; reset was refused');
+  }
+  const owned = await realpath(expected);
+  if (owned !== path.join(await realpath(worktreeRoot), run.id)) {
+    throw new Error('Worktree does not belong to this task; reset was refused');
+  }
+  const top = (await git(run.worktree, ['rev-parse', '--show-toplevel'],undefined,{run,cleanup})).trim();
+  if (await realpath(top) !== owned || await realpath(run.repository) === owned) {
+    throw new Error('Worktree does not belong to this task; reset was refused');
+  }
   await git(run.worktree, ["reset", "--hard", run.baseHead],undefined,{run,cleanup});
-  await git(run.worktree, ["clean", "-fd"],undefined,{run,cleanup});
+  await git(run.worktree, ["clean", "-fdx"],undefined,{run,cleanup});
 }
 
 function stopChild(scope) {if(scope)void scope.stop();}
@@ -423,7 +436,7 @@ async function checkChanges(run) {
 function drainQueue() {
   if (!ready || stopping) return;
   while ([...runs.values()].filter((run) => run.starting).length < settings.maxConcurrentRuns) {
-    const run = [...runs.values()].find((candidate) => !creatingRuns.has(candidate.id) && !candidate.starting && (
+    const run = [...runs.values()].find((candidate) => !creatingRuns.has(candidate.id) && !candidate.activationPending && !candidate.starting && (
       (candidate.state === "queued" && candidate.queuedAction === "analysis") ||
       (candidate.state === "approved" && candidate.queuedAction === "implementation")
     ));
@@ -473,10 +486,22 @@ async function retry(run) {
     if (!run.worktree) await createWorktree(run, { preserveBaseline: true });
     await resetWorktree(run);
   }
-  prepareRetry(run);
-  run.state = run.phase === "analysis" ? "queued" : "approved";
-  run.queuedAction = run.phase === "analysis" ? "analysis" : "implementation";
-  await persist(run);
+  await activateRun(run, next => {
+    prepareRetry(next);
+    next.state = next.phase === "analysis" ? "queued" : "approved";
+    next.queuedAction = next.phase === "analysis" ? "analysis" : "implementation";
+  });
+}
+
+async function activateRun(run, change) {
+  stageActivation(run, change);
+  try { await persist(run); }
+  catch (error) {
+    restoreActivation(run);
+    emitRun(run);
+    throw error;
+  }
+  delete run.activationPending;
   drainQueue();
 }
 
@@ -659,6 +684,7 @@ async function api(req, res, url) {
       stopChild(child);
     } else if (match[2] === "retry") {
       await retry(run);
+      return send(res,202,run);
     } else if (match[2] === "reject") {
       rejectRun(run);
       await cleanupWorktree(run);
@@ -675,9 +701,11 @@ async function api(req, res, url) {
     } else {
       const reason = budgetReason(run, settings, repositoryTokens(run.repository));
       if (reason) throw new Error(reason);
-      approveRun(run);
-      run.queuedAction = "implementation";
-      drainQueue();
+      await activateRun(run, next => {
+        approveRun(next);
+        next.queuedAction = "implementation";
+      });
+      return send(res,202,run);
     }
     await persist(run);
     return send(res, 202, run);

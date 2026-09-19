@@ -1,4 +1,4 @@
-const cacheName = "codex-control-plane-shell-v14";
+const cacheName = "codex-control-plane-shell-v15";
 const shell = ["/", "/styles.css", "/workspace.css", "/app.js", "/notifications.js", "/environment.js", "/run-output.js", "/live-view.js", "/task-composer.js", "/feedback.js", "/event-viewer.js", "/onboarding.js", "/locale.js", "/run-view.js", "/connection.js", "/run-state.js", "/execution-view.js", "/change-check.js", "/workspace.js", "/report-view.js", "/diff-view.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {

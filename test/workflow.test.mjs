@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, transition } from "../lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, stageActivation, transition } from "../lib/workflow.mjs";
 
 test("a run cannot write before approval", () => {
   const run = createRun({ id: "1", repository: "/tmp/repo", prompt: "Fix tests" });
@@ -82,4 +82,35 @@ test("read-only tasks cannot enter write approvals or apply changes", () => {
   run.state = "failed";
   prepareRetry(run);
   assert.equal(run.phase, "analysis");
+});
+
+test('interrupted approvals restore the decision without refunding concurrent usage', () => {
+  const run=createRun({id:'approval',repository:'/tmp/repo',prompt:'Plan'});
+  transition(run,'running','Analysis');requestWriteApproval(run);
+  const events=structuredClone(run.events),revision=run.revision;
+  stageActivation(run,next=>{approveRun(next);next.queuedAction='implementation';});
+  const saved=JSON.parse(JSON.stringify(run));saved.usage.totalTokens=30;
+  assert.equal(restoreActivation(saved),true);
+  assert.equal(saved.state,'awaiting_approval');assert.deepEqual(saved.events,events);
+  assert.equal(saved.usage.totalTokens,30);assert.ok(saved.revision>revision);
+  assert.equal(saved.activationPending,undefined);assert.equal(restoreActivation(saved),false);
+});
+
+test('interrupted retries preserve cancellation, retry count and prior write approvals', () => {
+  const run=createRun({id:'retry',repository:'/tmp/repo',prompt:'Fix'});
+  transition(run,'running','Analysis');requestWriteApproval(run);approveRun(run);cancelRun(run);
+  run.error='Prior cancellation';run.retries=2;
+  const events=structuredClone(run.events);
+  stageActivation(run,next=>{prepareRetry(next);next.state='approved';next.queuedAction='implementation';});
+  assert.equal(restoreActivation(run),true);
+  assert.equal(run.state,'cancelled');assert.equal(run.cancelRequested,true);assert.equal(run.retries,2);
+  assert.equal(run.phase,'implementation');assert.equal(run.error,'Prior cancellation');assert.deepEqual(run.events,events);
+});
+
+test('invalid activations and malformed rollback records never create approval', () => {
+  const run=createRun({id:'invalid',repository:'/tmp/repo',prompt:'Plan'}),before=structuredClone(run);
+  assert.throws(()=>stageActivation(run,approveRun),/not awaiting approval/);assert.deepEqual(run,before);
+  run.activationPending={state:'approved',eventCount:0};
+  const malformed=structuredClone(run);
+  assert.throws(()=>restoreActivation(run),/Invalid pending/);assert.deepEqual(run,malformed);
 });

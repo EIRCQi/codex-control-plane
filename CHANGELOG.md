@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3 — 2026-09-19
+
+- Stage approval/retry activation with a persisted rollback point and exclude it from scheduling until the covering save succeeds. Restore prior state, retry count, cancellation flags and workflow events on save failure. Validate changes on a draft before changing live state.
+- Restore interrupted activations at startup before queue scheduling. An unconfirmed approval returns to approval; an unconfirmed retry returns to its prior terminal state. Keep usage, execution evidence and prepared worktree metadata; require the user to confirm again and display a translated recovery event.
+- Clean ignored untracked files when resetting implementation worktrees for cancellation/retry. Before destructive Git operations, verify the task-owned path, its canonical location and Git root; reject redirected paths rather than touching another directory. Nested Git repositories remain subject to Git's normal protection; this is not a filesystem snapshot restore.
+- Add HTTP regressions for failed retry saves followed by queue release, failed approval saves, ignored retry leftovers, pending activation restart and redirected worktree paths. The first three fail against v0.9.2. Add cross-platform workflow recovery tests. No added dependencies or manual migration; no real model calls, native desktop acceptance or installer publication.
+
+All 149 local Node tests pass, including confirmed queued approval across orderly restart; 44 runtime/browser scripts pass syntax and relative-import checks, with a clean Git whitespace check.
+
 ## 0.9.2 — 2026-09-19
 
 - Reconcile task counters from the durable usage ledger after interrupted-execution recovery and before retry/approval budgets are evaluated. Preserve monotonic usage when a crash occurs between ledger and run-snapshot writes; do not add recovered execution duration twice. Record a translated usage-recovery event when counters are restored.
