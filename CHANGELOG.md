@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2 — 2026-09-19
+
+- Reconcile task counters from the durable usage ledger after interrupted-execution recovery and before retry/approval budgets are evaluated. Preserve monotonic usage when a crash occurs between ledger and run-snapshot writes; do not add recovered execution duration twice. Record a translated usage-recovery event when counters are restored.
+- Maintain aggregate token/time/model totals incrementally and return defensive summary copies. Ordinary task logs no longer rescan all historical usage. Broadcast usage only when its revision or visible task membership changes, and skip the summary broadcast when no clients are subscribed. Reconnects and `/api/usage` still receive a current summary, including retained usage from deleted history.
+- Skip unchanged ledger writes while preserving covering-write acknowledgements for observations received during an in-flight save. A failed save does not advance the durable revision and remains retryable.
+- Cancel Git recovery before awaiting startup completion during shutdown, including startup cleanup commands. Do not publish readiness or install the checkpoint timer if shutdown arrived during the initial save. Preserve pending apply intents for the next startup.
+- Add real HTTP regressions that failed against v0.9.1: ledger-ahead task budgets, redundant SSE usage during an 80-message log burst with 1,000 historical tasks, and blocked startup Git cancellation. Add write-count, in-flight durability and aggregate/model/time recovery checks. Tests use local Git and simulated CLI processes; no real-account tasks or native desktop acceptance is claimed.
+
+All 140 local Node tests pass; 44 runtime/browser scripts pass syntax and relative-import checks, with a clean Git whitespace check.
+
 ## 0.9.1 — 2026-09-17
 
 - Share process cleanup between Codex execution and Git commands. On POSIX, signal owned process groups and escalate after three seconds even if the leader exits first. Wait for descendant cleanup and final output before reusing a task/worktree. On Windows, request tree termination through system `taskkill /T /F` while the leader is running. Deliberately detached processes outside these groups/trees are outside this mechanism.

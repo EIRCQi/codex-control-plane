@@ -33,12 +33,13 @@ if(args.at(-1).includes('quota peer')){
 }
 `,{mode:0o755});
   const servers=[];
-  async function launch({expectFailure=false}={}){
-    const child=spawn(process.execPath,['server.mjs'],{cwd:root,detached:true,env:{...process.env,PORT:'0',CODEX_CONTROL_PLANE_DATA_DIR:data,CODEX_CONTROL_PLANE_CODEX_BIN:fake,CODEX_CONTROL_PLANE_GIT_BIN:''},stdio:['ignore','pipe','pipe']});
+  async function launch({expectFailure=false,waitReady=true,env={}}={}){
+    const child=spawn(process.execPath,['server.mjs'],{cwd:root,detached:true,env:{...process.env,PORT:'0',CODEX_CONTROL_PLANE_DATA_DIR:data,CODEX_CONTROL_PLANE_CODEX_BIN:fake,CODEX_CONTROL_PLANE_GIT_BIN:'',...env},stdio:['ignore','pipe','pipe']});
     const record={child,closed:false,output:''};servers.push(record);
     record.done=new Promise(resolve=>child.once('exit',(code,signal)=>{record.closed=true;resolve({code,signal});}));
     child.stdout.on('data',c=>record.output+=c);child.stderr.on('data',c=>record.output+=c);
     if(expectFailure){await until(()=>record.closed,'rejected startup');return record;}
+    if(!waitReady)return record;
     record.url=await until(()=>record.output.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0],'runner startup');
     record.request=async(route,method='GET',body)=>{
       const response=await fetch(record.url+route,{method,headers:{'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(8000)});

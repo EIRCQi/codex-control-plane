@@ -82,6 +82,7 @@ const messages = new Map([
   ['Template description must be text', '模板说明必须是文本。'],
   ['Too many event connections; close unused windows and reconnect', '实时连接数量已达上限，请关闭不再使用的控制台窗口后重连。'],
   ['Task creation was interrupted before confirmation; review and retry the task', '任务创建尚未确认时执行器已中断，请检查后手动重试。'],
+  ['Task usage restored from the durable ledger', '已从用量账本恢复任务累计用量，预算检查将使用恢复后的数值。'],
   ['Codex turn failed', 'Codex 执行轮次失败，请查看诊断信息。'],
   ['An oversized Codex event was skipped; later events will still be processed', '已跳过一条超过大小限制的事件，后续事件会继续处理。'],
   ['An oversized diagnostic line was truncated', '一条过长的诊断信息已截断。'],

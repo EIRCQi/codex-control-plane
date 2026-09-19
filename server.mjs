@@ -35,6 +35,7 @@ const runnerEnv = runtimeEnvironment();
 const runnerId = randomUUID();
 let checkpointTimer;
 let releaseDataLock, usageLedger, applyJournal;
+let publishedUsageKey=null;
 let runtimeSettings = { ...runtimeDefaults };
 let diagnosticsPromise = null;
 const templatesFile = path.join(dataDir, "templates.json");
@@ -110,6 +111,10 @@ async function initialize() {
       run.queuedAction ||= run.phase === "implementation" ? "implementation" : "analysis";
       run.starting = false;
       recoverExecutions(run);
+      if(usageLedger.restore(run)) {
+        run.updatedAt=new Date().toISOString();
+        run.events.push({type:'usage.restored',message:'Task usage restored from the durable ledger',at:run.updatedAt});
+      }
       if (run.state === "running" || run.creationPending) {
         run.state = "failed";
         run.error = run.creationPending ? 'Task creation was interrupted before confirmation; review and retry the task' : "Control plane restarted while this phase was running";
@@ -156,8 +161,13 @@ function repositoryTokens(repository) {
   return usageLedger.repositoryTokens(repository);
 }
 
-function usageSummary(){const list=visibleRuns();usageLedger.observeAll(list);return usageLedger.summary(list);}
-function broadcastUsage(){broadcast('usage',usageSummary());}
+function usageSummary(){return usageLedger.summary(visibleRuns());}
+function broadcastUsage(){
+  if(stopping || !eventHub.size)return;
+  const key=`${usageLedger.revision}:${runs.size-creatingRuns.size}`;
+  if(key===publishedUsageKey)return;
+  broadcast('usage',usageSummary());publishedUsageKey=key;
+}
 
 async function jsonBody(req) {
   let raw = "";
@@ -294,6 +304,7 @@ async function executeCodex(run, sandbox, prompt) {
       const error = spawnError?.message || protocolError || (code === 0 ? null : entry.diagnostics.trim() || `Codex exited with code ${code}`);
       const status = run.budgetExceeded ? 'budget_exceeded' : run.cancelRequested ? 'cancelled' : error ? 'failed' : 'completed';
       finishExecution(run, entry, status, {exitCode:code, error});
+      usageLedger.observe(run);
       if (run.cancelRequested) reject(new Error('Run cancelled'));
       else if (error) reject(new Error(error));
       else resolve(entry.output);
@@ -739,6 +750,7 @@ export const serverReady = (async () => {
     await initialize();
     if(stopping)throw new Error('Runner is stopping');
     await persist();
+    if(stopping)throw new Error('Runner is stopping');
     ready = true;
     checkpointTimer = setInterval(() => {
       if (stopping) return;
@@ -760,13 +772,16 @@ export function shutdown() {
   if (shutdownPromise) return shutdownPromise;
   stopping = true;
   clearInterval(checkpointTimer);
+  // Startup recovery can itself be awaiting Git; abort it before waiting for ready.
+  shutdownController.abort();
+  const startupGitShutdown=ready ? null : gitRunner.shutdown();
   shutdownPromise = (async () => {
     await serverReady.catch(()=>{});
+    await startupGitShutdown;
     controlServer.close();
     const authShutdown=auth.shutdown();
     const eventsShutdown=eventHub.close();
     controlServer.closeIdleConnections();
-    shutdownController.abort();
     for (const controller of runControllers.values()) controller.abort();
     for (const req of requestBodies) if (!req.complete) req.destroy();
     for (const run of runs.values()) {
