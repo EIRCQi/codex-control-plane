@@ -13,6 +13,7 @@ async function fixture(t) {
   await mkdir(repo); await mkdir(root);
   const git = async (cwd, args) => execFileSync('git', args, {cwd, encoding:'utf8', stdio:['ignore','pipe','pipe']});
   await git(repo, ['init', '-q']);
+  await git(repo, ['config', 'core.autocrlf', 'false']);
   await git(repo, ['config', 'user.name', 'Test']); await git(repo, ['config', 'user.email', 'test@example.invalid']);
   await writeFile(path.join(repo, 'README.md'), 'baseline\n');
   await git(repo, ['add', '.']); await git(repo, ['commit', '-qm', 'Initial']);
@@ -58,6 +59,8 @@ test('cleanup refuses directory symlinks and junctions without following them', 
 
 test('worktree ownership rejects a Git link copied from another task in the same repository', async t => {
   const f = await fixture(t); const run = await f.add('redirected-link'); const peer = await f.add('peer-link');
+  // Replace the link rather than truncating Git for Windows' hidden .git file.
+  await rm(path.join(run.worktree, '.git'));
   await writeFile(path.join(run.worktree, '.git'), await readFile(path.join(peer.worktree, '.git')));
   await writeFile(path.join(run.worktree, 'README.md'), 'keep this change');
   await assert.rejects(inspectOwnedWorktree(run, f), /does not belong to this task/);
