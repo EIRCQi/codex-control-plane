@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { access, mkdir, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ import { manageProcessTree, ownedProcessOptions } from './lib/process-tree.mjs';
 import { acquireDataLock } from './lib/data-lock.mjs';
 import { createUsageLedger } from './lib/usage-ledger.mjs';
 import { createApplyJournal, expectedApplyTree, inspectApplyResult } from './lib/apply-journal.mjs';
+import { cleanupOwnedWorktree, inspectOwnedWorktree } from './lib/worktrees.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -220,11 +221,20 @@ async function createWorktree(run, { preserveBaseline = false } = {}) {
 }
 
 async function cleanupWorktree(run) {
-  if (!run.worktree) return;
-  try { await git(run.repository, ["worktree", "remove", "--force", run.worktree],undefined,{cleanup:true}); }
-  catch { await rm(run.worktree, { recursive: true, force: true }); }
-  try { await git(run.repository, ["branch", "-D", run.branch],undefined,{cleanup:true}); } catch {}
-  run.worktree = null;
+  try {await cleanupOwnedWorktree(run, {root:worktreeRoot, git});}
+  catch (error) {throw new Error(`Worktree cleanup failed: ${error.message}`, {cause:error});}
+}
+
+async function cleanupCancelledWorktree(run, reset = false) {
+  try {
+    if (reset && run.worktree) await resetWorktree(run, {cleanup:true});
+    else await cleanupWorktree(run);
+  } catch (error) {
+    run.error = reset ? `Worktree cleanup failed: ${error.message}` : error.message;
+    const at = new Date().toISOString();
+    run.events.push({type:'worktree.cleanup_failed', message:run.error, at});
+    touchRun(run, at);
+  }
 }
 
 function requireBaseline(run) {
@@ -244,18 +254,7 @@ async function verifyRepositoryBaseline(run) {
 
 async function resetWorktree(run, {cleanup=false}={}) {
   requireBaseline(run);
-  const expected = path.resolve(worktreeRoot, run.id);
-  if (path.dirname(expected) !== path.resolve(worktreeRoot) || !run.worktree || path.resolve(run.worktree) !== expected) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
-  const owned = await realpath(expected);
-  if (owned !== path.join(await realpath(worktreeRoot), run.id)) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
-  const top = (await git(run.worktree, ['rev-parse', '--show-toplevel'],undefined,{run,cleanup})).trim();
-  if (await realpath(top) !== owned || await realpath(run.repository) === owned) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
+  await inspectOwnedWorktree(run, {root:worktreeRoot, git, cleanup});
   await git(run.worktree, ["reset", "--hard", run.baseHead],undefined,{run,cleanup});
   await git(run.worktree, ["clean", "-fdx"],undefined,{run,cleanup});
 }
@@ -343,7 +342,7 @@ async function analyze(run) {
     } else requestWriteApproval(run);
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Analysis failed", { error: error.message });
-    else await cleanupWorktree(run);
+    else await cleanupCancelledWorktree(run);
   }
   await persist(run);
 }
@@ -372,9 +371,7 @@ async function implement(run) {
     }
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Implementation failed", { error: error.message });
-    else if (run.worktree) {
-      await resetWorktree(run,{cleanup:true});
-    }
+    else await cleanupCancelledWorktree(run, true);
   }
   await persist(run);
 }
@@ -686,11 +683,13 @@ async function api(req, res, url) {
       await retry(run);
       return send(res,202,run);
     } else if (match[2] === "reject") {
+      rejectRun(structuredClone(run));
+      await cleanupWorktree(run);
       rejectRun(run);
-      await cleanupWorktree(run);
     } else if (match[2] === "discard") {
-      discardRun(run);
+      discardRun(structuredClone(run));
       await cleanupWorktree(run);
+      discardRun(run);
     } else if (match[2] === 'reconcile') {
       try {await recoverApply(run);}
       catch(error){run.applyRecovery=true;run.error=error.message;await persist(run);throw error;}

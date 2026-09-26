@@ -25,6 +25,7 @@ jobs:
       - run: node --check lib/data-lock.mjs
       - run: node --check lib/usage-ledger.mjs
       - run: node --check lib/apply-journal.mjs
+      - run: node --check lib/worktrees.mjs
       - run: node --check lib/event-hub.mjs
       - run: node --check electron.mjs
       - run: node --check public/app.js

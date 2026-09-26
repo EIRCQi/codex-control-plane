@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.4 — 2026-09-26
+
+- Share worktree ownership checks between cleanup and reset. Validate the task path and branch, reject symlinks/junctions, and check Git registration plus the linked-worktree administrative directory and backlink. Parse NUL-delimited Git records to preserve spaces and Unicode paths.
+- Remove recursive filesystem deletion as a fallback for failed Git worktree removal. Preserve Git locks, timeout/error causes and task metadata; propagate branch-deletion failures. Cleanup can resume after restart when the directory is already absent, without pruning other tasks' registrations.
+- Validate reject/discard actions before cleanup and change their workflow state only after cleanup succeeds. Persist cancellation cleanup errors as task diagnostics/events and add Chinese messages. Refresh the static shell cache for the updated translations.
+- Add 14 regression checks covering outside directories, registered external worktrees, unrelated saved branches, locked reject/discard, branch-lock failures across restart, unrelated repositories at expected paths, cancellation diagnostics, detached work, missing directories, symlinks/junctions, copied Git links and command timeout propagation. The initial HTTP regressions fail against v0.9.3. The new direct Git tests run on all CI platforms; simulated CLI HTTP tests remain POSIX-only.
+
+All 163 local Node tests pass; 45 runtime/browser scripts pass syntax and relative-import checks, with a clean Git whitespace check. No added dependencies or manual migration; no real-account model calls, native desktop acceptance or installer publication.
+
 ## 0.9.3 — 2026-09-19
 
 - Stage approval/retry activation with a persisted rollback point and exclude it from scheduling until the covering save succeeds. Restore prior state, retry count, cancellation flags and workflow events on save failure. Validate changes on a draft before changing live state.
