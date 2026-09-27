@@ -33,6 +33,8 @@ test('diagnostic subprocesses bound output and time and report spawn failures', 
   assert.equal(timeout.reason, 'TIMEOUT'); assert.equal(timeout.ok, false);
   const missing = await probe(path.join(os.tmpdir(), 'ccp-no-such-program'), []);
   assert.equal(missing.reason, 'ENOENT');
+  const unicode = await probe(process.execPath, ['-e', `const output=Buffer.from('检测完成 😀');process.stdout.write(output.subarray(0,1));setTimeout(()=>process.stdout.write(output.subarray(1)),25);`]);
+  assert.equal(unicode.ok, true); assert.equal(unicode.output, '检测完成 😀');
 });
 
 test('diagnostics explain missing tools and unwritable data targets without creating files', async (t) => {

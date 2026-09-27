@@ -514,7 +514,7 @@ async function api(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/auth/cancel') return send(res, 200, await auth.cancel());
   if (req.method === "GET" && url.pathname === "/api/diagnostics") {
     if (!diagnosticsPromise) {
-      const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion })
+      const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion, signal:shutdownController.signal })
         .finally(() => { if (diagnosticsPromise === pending) diagnosticsPromise = null; });
       diagnosticsPromise = pending;
     }
