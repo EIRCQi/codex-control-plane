@@ -101,6 +101,42 @@ test('a confirmed approval queued behind another task survives an orderly restar
   assert.equal(implemented.executions.length,2);assert.equal(implemented.events.filter(e=>e.type==='run.approved').length,1);
 });
 
+for(const action of ['create','approve','retry'])test(`a confirmed ${action} survives an immediate forced restart while queued`,options,async t=>{
+  const f=await fixture();t.after(()=>f.cleanup());
+  await writeFile(path.join(f.data,'settings.json'),JSON.stringify({maxConcurrentRuns:1,maxTokensPerRun:0,maxTokensPerRepository:0}));
+  // Record the independent CLI leader so forced server exit cannot leave a fixture behind.
+  const cli=path.join(f.dir,'codex');
+  await writeFile(cli,(await readFile(cli,'utf8')).replace("if(args.at(-1).includes('quota peer')){",`if(args.at(-1).includes('quota peer')){fs.writeFileSync(${JSON.stringify(f.marker)},JSON.stringify({pid:process.pid}));`));
+  let id;
+  if(action==='retry'){
+    const failed=createRun({id:'crash-retry-'+path.basename(f.dir),repository:f.repo,prompt:'Confirmed retry',mode:'review'});
+    failed.state='failed';failed.error='Previous attempt failed';id=failed.id;
+    await writeFile(path.join(f.data,'runs.json'),JSON.stringify([failed]));
+  }
+  const s=await f.launch();
+  if(action==='approve'){
+    const created=await s.request('/api/runs','POST',{repository:f.repo,prompt:'Confirmed approval'});
+    id=created.body.id;await s.state(id,'awaiting_approval');
+  }
+  const peer=await s.request('/api/runs','POST',{repository:f.repo,prompt:'quota peer',mode:'review'});
+  await until(async()=>(await s.run(peer.body.id)).logs.some(log=>log.message==='peer ready'),'peer occupies slot');
+  const response=action==='create'
+    ? await s.request('/api/runs','POST',{repository:f.repo,prompt:'Confirmed creation',mode:'review'})
+    : await s.request(`/api/runs/${id}/${action}`,'POST');
+  assert.equal(response.status,202);id=response.body.id;
+  assert.equal(response.body.state,action==='approve'?'approved':'queued');
+  await f.stop(s,'SIGKILL');
+  const {pid}=JSON.parse(await readFile(f.marker,'utf8'));process.kill(pid,'SIGTERM');
+  const saved=JSON.parse(await readFile(path.join(f.data,'runs.json'),'utf8')).find(run=>run.id===id);
+  assert.equal(saved.creationPending,undefined,'successful creation must already be durable');
+  assert.equal(saved.activationPending,undefined,'successful approval/retry must already be durable');
+  const restarted=await f.launch();
+  const finished=await restarted.state(id,action==='approve'?'awaiting_merge':'completed');
+  assert.equal(finished.events.some(event=>event.type==='run.activation_recovered'),false);
+  assert.equal(finished.retries,action==='retry'?1:0);
+  assert.equal(finished.executions.length,action==='approve'?2:1);
+});
+
 test('retry refuses a redirected worktree before removing ignored files outside its owned path',options,async t=>{
   const f=await fixture();
   const id='redirected-'+path.basename(f.dir),owned=path.join(os.tmpdir(),'codex-control-plane-worktrees',id);

@@ -5,7 +5,7 @@ import { access, mkdir, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, stageActivation, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
 import { emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson, createSnapshotWriter, createCollectionWriter } from "./lib/storage.mjs";
@@ -63,7 +63,7 @@ const runWriter = createSnapshotWriter(
   () => structuredClone([...runs.values()].map(run => creatingRuns.has(run.id) ? {...run, creationPending:true} : run)),
   async value => {
     // Ledger first: a crash or a later history deletion must not refund usage.
-    usageLedger.observeAll(value.filter(run=>!run.creationPending));
+    usageLedger.observeAll(value.filter(run=>!run.creationPending && !creatingRuns.has(run.id)));
     await usageLedger.flush();
     await saveJson(dataFile, value);
   },
@@ -457,6 +457,7 @@ function drainQueue() {
 }
 
 function enforceBudget(run) {
+  if (creatingRuns.has(run.id)) return false;
   if (!['queued', 'running', 'approved'].includes(run.state)) return false;
   const reason = budgetReason(run, settings, repositoryTokens(run.repository));
   if (!reason) return false;
@@ -491,14 +492,17 @@ async function retry(run) {
 }
 
 async function activateRun(run, change) {
-  stageActivation(run, change);
-  try { await persist(run); }
-  catch (error) {
-    restoreActivation(run);
-    emitRun(run);
-    throw error;
-  }
-  delete run.activationPending;
+  // The idle live run stays unchanged until its final decision is durable.
+  // A later snapshot must see that decision before this batch is acknowledged.
+  let confirmed;
+  await runWriter.flush({
+    prepare(snapshot) {
+      confirmed = snapshot.find(candidate => candidate.id === run.id);
+      change(confirmed);
+    },
+    commit() { Object.assign(run, confirmed); },
+  });
+  emitRun(run);
   drainQueue();
 }
 
@@ -655,7 +659,13 @@ async function api(req, res, url) {
       await updateProjects(next=>{const current=next.get(project.id);if(current)next.set(project.id,{...current,lastUsedAt:new Date().toISOString()});});
     }
     creatingRuns.add(run.id); runs.set(run.id,run);
-    try {await persist(run);}
+    touchRun(run);
+    try {
+      await runWriter.flush({
+        prepare(snapshot) { delete snapshot.find(candidate => candidate.id === run.id).creationPending; },
+        commit() { creatingRuns.delete(run.id); },
+      });
+    }
     catch(error){runs.delete(run.id);await runWriter.flush().catch(failure=>console.error(failure));throw error;}
     finally {creatingRuns.delete(run.id);}
     emitRun(run);
