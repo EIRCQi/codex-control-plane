@@ -491,7 +491,7 @@ async function retry(run) {
   });
 }
 
-async function activateRun(run, change) {
+async function saveRunChange(run, change) {
   // The idle live run stays unchanged until its final decision is durable.
   // A later snapshot must see that decision before this batch is acknowledged.
   let confirmed;
@@ -503,6 +503,10 @@ async function activateRun(run, change) {
     commit() { Object.assign(run, confirmed); },
   });
   emitRun(run);
+}
+
+async function activateRun(run, change) {
+  await saveRunChange(run, change);
   drainQueue();
 }
 
@@ -579,8 +583,14 @@ async function api(req, res, url) {
     if (run.starting || processes.has(run.id)) throw new Error("Run is still stopping; wait before deleting");
     await cleanupWorktree(run);
     usageLedger.observe(run);await usageLedger.flush();
-    runs.delete(run.id);
-    try {await persist();}catch(error){runs.set(run.id,run);throw error;}
+    await runWriter.flush({
+      prepare(snapshot) {
+        const index = snapshot.findIndex(candidate => candidate.id === run.id);
+        if (index >= 0) snapshot.splice(index, 1);
+      },
+      commit() { runs.delete(run.id); },
+    });
+    broadcast('snapshot',visibleRuns());broadcastUsage();
     return send(res, 200, { deleted: true });
   }
   if (req.method === "GET" && url.pathname === "/api/usage") {
@@ -681,9 +691,12 @@ async function api(req, res, url) {
     if (run.mode === "review" && ["approve", "apply"].includes(match[2])) throw new Error("Read-only reviews cannot request write access");
     if (match[2] === "archive" || match[2] === "unarchive") {
       if (!terminalStates.has(run.state)) throw new Error("Only finished runs can be archived");
-      run.archived = match[2] === "archive";
-      run.updatedAt = new Date().toISOString();
-      run.events.push({ type: `run.${match[2]}`, message: run.archived ? "Run archived" : "Run restored", at: run.updatedAt });
+      await saveRunChange(run, next => {
+        next.archived = match[2] === "archive";
+        touchRun(next);
+        next.events.push({ type: `run.${match[2]}`, message: next.archived ? "Run archived" : "Run restored", at: next.updatedAt });
+      });
+      return send(res,202,run);
     } else if (match[2] === "cancel") {
       cancelRun(run);
       runControllers.get(run.id)?.abort();
