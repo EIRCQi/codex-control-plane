@@ -27,6 +27,11 @@ function fixture(t, options = {}) {
       children.push(child);
       return child;
     },
+    manageChild:child => {
+      const done = new Promise(resolve => child.once('close', code => resolve({code})));
+      let stopping = false;
+      return {wait:() => done, stop:() => {if (!stopping) {stopping = true;child.kill('SIGTERM');} return done;}};
+    },
     onChange:value => updates.push(value), ...options,
   });
   t.after(() => manager.shutdown());
@@ -49,7 +54,7 @@ test('login reuses existing CLI credentials and never exposes credential-status 
 
 test('rechecking a missing executable recovers, while failed status probes never start login', async t => {
   let available = false;
-  const h = fixture(t, {getExecutable:() => { if (!available) throw new Error('private-path-error'); return '/fixture/codex'; }, probeLogin:async () => ({ok:false, code:null, reason:'TIMEOUT'})});
+  const h = fixture(t, {getExecutable:() => { if (!available) throw new Error('private-path-error'); return '/fixture/codex'; }, probeLogin:async () => ({ok:false, code:1, reason:'TIMEOUT'})});
   assert.equal((await h.manager.refresh()).state, 'missing');
   available = true;
   assert.equal((await h.manager.refresh()).state, 'error');
@@ -96,16 +101,62 @@ test('cancel during preflight prevents a delayed login from spawning', async t =
   assert.equal(h.children.length, 0);
 });
 
-test('cancellation waits for exit and escalates resistant processes before allowing retry', async t => {
+test('cancellation waits for owned process cleanup before allowing another login', async t => {
   const h = fixture(t, {probeLogin:async () => signedOut});
   h.manager.start(); await until(() => h.children.length);
   const child = h.children[0]; child.resist = true;
   const cancelled = h.manager.cancel();
   assert.equal(h.manager.start().state, 'cancelling'); assert.equal(h.children.length, 1);
+  child.finish(null);
   await cancelled;
-  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+  assert.deepEqual(child.signals, ['SIGTERM']);
   assert.equal(h.manager.snapshot().busy, false); assert.equal(h.manager.snapshot().state, 'cancelled');
   h.manager.start(); await until(() => h.children.length === 2);
+});
+
+test('cancellation during executable resolution never begins a credential probe', async t => {
+  let release, probes = 0;
+  const h = fixture(t, {getExecutable:() => new Promise(resolve => {release = resolve;}), probeLogin:async () => {probes++;return signedOut;}});
+  h.manager.start(); await until(() => release);
+  const cancelled = h.manager.cancel();
+  release('/fixture/codex');
+  assert.equal((await cancelled).state, 'cancelled');
+  assert.equal(probes, 0); assert.equal(h.children.length, 0);
+});
+
+test('cancelling a login waiting on refresh aborts the shared inspection', async t => {
+  let release, signal;
+  const h = fixture(t, {probeLogin:(command, args, options) => new Promise(resolve => {
+    release = resolve; signal = options.signal;
+    signal?.addEventListener('abort', () => resolve({ok:false, code:null, reason:'ABORTED'}), {once:true});
+  })});
+  const refreshing = h.manager.refresh(); await until(() => release);
+  try {
+    h.manager.start(); const cancelling = h.manager.cancel();
+    assert.equal(signal?.aborted, true);
+    assert.equal((await cancelling).state, 'cancelled');
+    assert.equal(h.children.length, 0);
+  } finally {release(signedOut); await refreshing;}
+});
+
+test('cancellation during final credential verification never publishes a signed-in result', async t => {
+  let probes = 0, release, signal;
+  const h = fixture(t, {probeLogin:(command, args, options) => {
+    if (++probes === 1) return Promise.resolve(signedOut);
+    return new Promise(resolve => {
+      release = resolve; signal = options.signal;
+      signal?.addEventListener('abort', () => resolve({ok:false, code:null, reason:'ABORTED'}), {once:true});
+    });
+  }});
+  h.manager.start(); await until(() => h.children.length);
+  h.children[0].finish(0); await until(() => release);
+  try {
+    assert.equal(h.manager.snapshot().state, 'verifying');
+    const cancelling = h.manager.cancel();
+    assert.equal(signal?.aborted, true);
+    assert.equal((await cancelling).state, 'cancelled');
+    assert.equal(h.updates.some(update => update.state === 'signed_in'), false);
+  } finally {release(signedIn);}
 });
 
 test('login timeout and Runner shutdown close owned login processes', async t => {

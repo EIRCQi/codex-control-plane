@@ -19,6 +19,44 @@ test('a failed snapshot rejects its callers and later flushes can recover', asyn
   const writer=createSnapshotWriter(()=>({value:2}),async value=>{if(fail)throw new Error('disk unavailable');saved.push(value);});
   await assert.rejects(writer.flush(),/disk unavailable/);fail=false;await writer.flush();assert.deepEqual(saved,[{value:2}]);
 });
+
+test('queued confirmations stay invisible until their covering write and survive a pending background save', async () => {
+  const current={first:'waiting',second:'failed',usage:0},writes=[],releases=[];
+  const writer=createSnapshotWriter(()=>structuredClone(current),snapshot=>new Promise(resolve=>{writes.push(snapshot);releases.push(resolve);}));
+  const background=writer.flush();await tick();
+  const confirm=key=>writer.flush({prepare:snapshot=>{snapshot[key]='queued';},commit:()=>{current[key]='queued';}});
+  const first=confirm('first'),second=confirm('second');
+  let confirmed=false;first.then(()=>confirmed=true);
+  assert.equal(current.first,'waiting');assert.equal(current.second,'failed');
+  releases[0]();await background;await tick();
+  assert.deepEqual(writes[1],{first:'queued',second:'queued',usage:0});
+  assert.equal(confirmed,false);assert.equal(current.first,'waiting');
+  current.usage=42;const checkpoint=writer.flush();
+  releases[1]();await Promise.all([first,second]);await tick();
+  assert.equal(confirmed,true);
+  assert.deepEqual(current,{first:'queued',second:'queued',usage:42});
+  assert.deepEqual(writes[2],current,'the next snapshot must include confirmations committed by the previous write');
+  releases[2]();await checkpoint;
+});
+
+test('failed confirmations cannot leak into a background save and remain retryable', async () => {
+  const current={state:'failed',retries:0},writes=[],releases=[];
+  const writer=createSnapshotWriter(()=>structuredClone(current),snapshot=>new Promise((resolve,reject)=>{writes.push(snapshot);releases.push({resolve,reject});}));
+  let committed=0;
+  const retry=()=>writer.flush({
+    prepare:snapshot=>{snapshot.state='queued';snapshot.retries++;},
+    commit:()=>{current.state='queued';current.retries++;committed++;},
+  });
+  const failed=assert.rejects(retry(),/disk unavailable/);await tick();
+  const checkpoint=writer.flush();
+  releases[0].reject(new Error('disk unavailable'));await failed;await tick();
+  assert.equal(committed,0);assert.deepEqual(current,{state:'failed',retries:0});
+  assert.deepEqual(writes[1],current,'a rejected retry must never be recorded by another save');
+  releases[1].resolve();await checkpoint;
+  const accepted=retry();await tick();releases[2].resolve();await accepted;
+  assert.equal(committed,1);assert.deepEqual(current,{state:'queued',retries:1});assert.deepEqual(writes[2],current);
+});
+
 test('collection writes commit only on success and serialized edits cannot lose each other', async () => {
   let current=new Map([['first',{value:1}]]),fail=false;
   const snapshots=[];

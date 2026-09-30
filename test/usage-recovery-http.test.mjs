@@ -9,6 +9,35 @@ import {createUsageLedger} from '../lib/usage-ledger.mjs';
 import {createApplyJournal} from '../lib/apply-journal.mjs';
 
 const options={skip:process.platform==='win32',timeout:20000};
+
+for(const scope of ['run','repository'])test(`invalid CLI counters cannot delay the ${scope} token budget`,options,async t=>{
+  const f=await fixture();t.after(()=>f.cleanup());
+  await writeFile(path.join(f.data,'settings.json'),JSON.stringify({maxConcurrentRuns:1,maxTokensPerRun:scope==='run'?50:0,maxTokensPerRepository:scope==='repository'?50:0}));
+  const events=[
+    {id:'first',type:'turn.completed',usage:{input_tokens:40,output_tokens:0}},
+    {id:'invalid',type:'turn.completed',usage:{input_tokens:-30,output_tokens:0,total_tokens:-30}},
+    {id:'last',type:'turn.completed',usage:{input_tokens:20,output_tokens:0}},
+    {type:'output',message:'usage fixtures sent'},
+  ];
+  await writeFile(path.join(f.dir,'codex'),`#!${process.execPath}
+process.stdout.write(${JSON.stringify(events.map(event=>JSON.stringify(event)).join('\n')+'\n')});
+setInterval(()=>{},1000);
+`,{mode:0o755});
+  const s=await f.launch();
+  const created=await s.request('/api/runs','POST',{repository:f.repo,prompt:'Check malformed usage',mode:'review'});
+  assert.equal(created.status,202);
+  const reported=await until(async()=>{const run=await s.run(created.body.id);return run.logs.some(log=>log.message==='usage fixtures sent')&&run;},'usage output received');
+  assert.equal(reported.usage.totalTokens,60,'valid usage after an invalid report must still accumulate');
+  const stopped=await s.state(created.body.id,'budget_exceeded');
+  assert.equal(stopped.executions[0].status,'budget_exceeded');
+  assert.equal((await s.request('/api/usage')).body.totalTokens,60);
+  await f.stop(s);const restarted=await f.launch();
+  assert.equal((await restarted.run(created.body.id)).usage.totalTokens,60);
+  assert.equal((await restarted.request('/api/usage')).body.totalTokens,60);
+  const denied=await restarted.request(`/api/runs/${created.body.id}/retry`,'POST');
+  assert.equal(denied.status,400);assert.match(denied.body.error,/token (?:budget|quota) exceeded/);
+});
+
 test('ledger-ahead crash recovery restores task usage before retry budget checks',options,async t=>{
   const f=await fixture();t.after(()=>f.cleanup());
   const run=createRun({id:'interrupted-budget',repository:f.repo,prompt:'Review',mode:'review'});run.state='failed';run.usage.inputTokens=10;run.usage.outputTokens=5;run.usage.totalTokens=15;

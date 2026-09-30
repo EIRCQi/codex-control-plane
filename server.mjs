@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { access, mkdir, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, stageActivation, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
+import { applyRun, approveRun, cancelRun, createRun, discardRun, exceedBudget, prepareRetry, rejectRun, requestMergeApproval, requestWriteApproval, restoreActivation, terminalStates, transition, touchRun } from "./lib/workflow.mjs";
 import { emptyUsage, recordUsage } from "./lib/usage.mjs";
 import { builtInTemplates, createProject, createTemplate, renderTemplate } from "./lib/catalog.mjs";
 import { saveJson, loadJson, createSnapshotWriter, createCollectionWriter } from "./lib/storage.mjs";
@@ -22,6 +22,7 @@ import { manageProcessTree, ownedProcessOptions } from './lib/process-tree.mjs';
 import { acquireDataLock } from './lib/data-lock.mjs';
 import { createUsageLedger } from './lib/usage-ledger.mjs';
 import { createApplyJournal, expectedApplyTree, inspectApplyResult } from './lib/apply-journal.mjs';
+import { cleanupOwnedWorktree, inspectOwnedWorktree } from './lib/worktrees.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -62,7 +63,7 @@ const runWriter = createSnapshotWriter(
   () => structuredClone([...runs.values()].map(run => creatingRuns.has(run.id) ? {...run, creationPending:true} : run)),
   async value => {
     // Ledger first: a crash or a later history deletion must not refund usage.
-    usageLedger.observeAll(value.filter(run=>!run.creationPending));
+    usageLedger.observeAll(value.filter(run=>!run.creationPending && !creatingRuns.has(run.id)));
     await usageLedger.flush();
     await saveJson(dataFile, value);
   },
@@ -220,11 +221,20 @@ async function createWorktree(run, { preserveBaseline = false } = {}) {
 }
 
 async function cleanupWorktree(run) {
-  if (!run.worktree) return;
-  try { await git(run.repository, ["worktree", "remove", "--force", run.worktree],undefined,{cleanup:true}); }
-  catch { await rm(run.worktree, { recursive: true, force: true }); }
-  try { await git(run.repository, ["branch", "-D", run.branch],undefined,{cleanup:true}); } catch {}
-  run.worktree = null;
+  try {await cleanupOwnedWorktree(run, {root:worktreeRoot, git});}
+  catch (error) {throw new Error(`Worktree cleanup failed: ${error.message}`, {cause:error});}
+}
+
+async function cleanupCancelledWorktree(run, reset = false) {
+  try {
+    if (reset && run.worktree) await resetWorktree(run, {cleanup:true});
+    else await cleanupWorktree(run);
+  } catch (error) {
+    run.error = reset ? `Worktree cleanup failed: ${error.message}` : error.message;
+    const at = new Date().toISOString();
+    run.events.push({type:'worktree.cleanup_failed', message:run.error, at});
+    touchRun(run, at);
+  }
 }
 
 function requireBaseline(run) {
@@ -244,18 +254,7 @@ async function verifyRepositoryBaseline(run) {
 
 async function resetWorktree(run, {cleanup=false}={}) {
   requireBaseline(run);
-  const expected = path.resolve(worktreeRoot, run.id);
-  if (path.dirname(expected) !== path.resolve(worktreeRoot) || !run.worktree || path.resolve(run.worktree) !== expected) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
-  const owned = await realpath(expected);
-  if (owned !== path.join(await realpath(worktreeRoot), run.id)) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
-  const top = (await git(run.worktree, ['rev-parse', '--show-toplevel'],undefined,{run,cleanup})).trim();
-  if (await realpath(top) !== owned || await realpath(run.repository) === owned) {
-    throw new Error('Worktree does not belong to this task; reset was refused');
-  }
+  await inspectOwnedWorktree(run, {root:worktreeRoot, git, cleanup});
   await git(run.worktree, ["reset", "--hard", run.baseHead],undefined,{run,cleanup});
   await git(run.worktree, ["clean", "-fdx"],undefined,{run,cleanup});
 }
@@ -343,7 +342,7 @@ async function analyze(run) {
     } else requestWriteApproval(run);
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Analysis failed", { error: error.message });
-    else await cleanupWorktree(run);
+    else await cleanupCancelledWorktree(run);
   }
   await persist(run);
 }
@@ -372,9 +371,7 @@ async function implement(run) {
     }
   } catch (error) {
     if (!["cancelled", "budget_exceeded"].includes(run.state)) transition(run, "failed", "Implementation failed", { error: error.message });
-    else if (run.worktree) {
-      await resetWorktree(run,{cleanup:true});
-    }
+    else await cleanupCancelledWorktree(run, true);
   }
   await persist(run);
 }
@@ -460,6 +457,7 @@ function drainQueue() {
 }
 
 function enforceBudget(run) {
+  if (creatingRuns.has(run.id)) return false;
   if (!['queued', 'running', 'approved'].includes(run.state)) return false;
   const reason = budgetReason(run, settings, repositoryTokens(run.repository));
   if (!reason) return false;
@@ -493,15 +491,22 @@ async function retry(run) {
   });
 }
 
+async function saveRunChange(run, change) {
+  // The idle live run stays unchanged until its final decision is durable.
+  // A later snapshot must see that decision before this batch is acknowledged.
+  let confirmed;
+  await runWriter.flush({
+    prepare(snapshot) {
+      confirmed = snapshot.find(candidate => candidate.id === run.id);
+      change(confirmed);
+    },
+    commit() { Object.assign(run, confirmed); },
+  });
+  emitRun(run);
+}
+
 async function activateRun(run, change) {
-  stageActivation(run, change);
-  try { await persist(run); }
-  catch (error) {
-    restoreActivation(run);
-    emitRun(run);
-    throw error;
-  }
-  delete run.activationPending;
+  await saveRunChange(run, change);
   drainQueue();
 }
 
@@ -517,7 +522,7 @@ async function api(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/auth/cancel') return send(res, 200, await auth.cancel());
   if (req.method === "GET" && url.pathname === "/api/diagnostics") {
     if (!diagnosticsPromise) {
-      const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion })
+      const pending = diagnose({ settings: runtimeSettings, env: runnerEnv, dataDir, version: appVersion, signal:shutdownController.signal })
         .finally(() => { if (diagnosticsPromise === pending) diagnosticsPromise = null; });
       diagnosticsPromise = pending;
     }
@@ -578,8 +583,14 @@ async function api(req, res, url) {
     if (run.starting || processes.has(run.id)) throw new Error("Run is still stopping; wait before deleting");
     await cleanupWorktree(run);
     usageLedger.observe(run);await usageLedger.flush();
-    runs.delete(run.id);
-    try {await persist();}catch(error){runs.set(run.id,run);throw error;}
+    await runWriter.flush({
+      prepare(snapshot) {
+        const index = snapshot.findIndex(candidate => candidate.id === run.id);
+        if (index >= 0) snapshot.splice(index, 1);
+      },
+      commit() { runs.delete(run.id); },
+    });
+    broadcast('snapshot',visibleRuns());broadcastUsage();
     return send(res, 200, { deleted: true });
   }
   if (req.method === "GET" && url.pathname === "/api/usage") {
@@ -658,7 +669,13 @@ async function api(req, res, url) {
       await updateProjects(next=>{const current=next.get(project.id);if(current)next.set(project.id,{...current,lastUsedAt:new Date().toISOString()});});
     }
     creatingRuns.add(run.id); runs.set(run.id,run);
-    try {await persist(run);}
+    touchRun(run);
+    try {
+      await runWriter.flush({
+        prepare(snapshot) { delete snapshot.find(candidate => candidate.id === run.id).creationPending; },
+        commit() { creatingRuns.delete(run.id); },
+      });
+    }
     catch(error){runs.delete(run.id);await runWriter.flush().catch(failure=>console.error(failure));throw error;}
     finally {creatingRuns.delete(run.id);}
     emitRun(run);
@@ -674,9 +691,12 @@ async function api(req, res, url) {
     if (run.mode === "review" && ["approve", "apply"].includes(match[2])) throw new Error("Read-only reviews cannot request write access");
     if (match[2] === "archive" || match[2] === "unarchive") {
       if (!terminalStates.has(run.state)) throw new Error("Only finished runs can be archived");
-      run.archived = match[2] === "archive";
-      run.updatedAt = new Date().toISOString();
-      run.events.push({ type: `run.${match[2]}`, message: run.archived ? "Run archived" : "Run restored", at: run.updatedAt });
+      await saveRunChange(run, next => {
+        next.archived = match[2] === "archive";
+        touchRun(next);
+        next.events.push({ type: `run.${match[2]}`, message: next.archived ? "Run archived" : "Run restored", at: next.updatedAt });
+      });
+      return send(res,202,run);
     } else if (match[2] === "cancel") {
       cancelRun(run);
       runControllers.get(run.id)?.abort();
@@ -686,11 +706,13 @@ async function api(req, res, url) {
       await retry(run);
       return send(res,202,run);
     } else if (match[2] === "reject") {
+      rejectRun(structuredClone(run));
+      await cleanupWorktree(run);
       rejectRun(run);
-      await cleanupWorktree(run);
     } else if (match[2] === "discard") {
-      discardRun(run);
+      discardRun(structuredClone(run));
       await cleanupWorktree(run);
+      discardRun(run);
     } else if (match[2] === 'reconcile') {
       try {await recoverApply(run);}
       catch(error){run.applyRecovery=true;run.error=error.message;await persist(run);throw error;}
@@ -829,8 +851,10 @@ if (!process.versions.electron) {
     process.once(signal, () => { void shutdown().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); }); });
   }
 }
-try { await serverReady; }
-catch (error) {
+// Export shutdown before recovery and the initial write finish, so an embedded
+// desktop can cancel startup rather than exiting around owned subprocesses.
+void serverReady.catch(error => {
+  if (stopping) return;
   console.error(startupErrorMessage(error, port));
   process.exitCode = 1;
-}
+});

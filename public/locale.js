@@ -51,6 +51,7 @@ const messages = new Map([
   ['Run is still active or stopping; try again shortly', '任务仍在运行或停止中，请稍后重试。'],
   ['Unconfirmed approval or retry restored; confirm the action again', '上次审批或重试未完成确认，已恢复原状态；请重新操作。'],
   ['Worktree does not belong to this task; reset was refused', '无法确认这是该任务的隔离工作区，已停止重置。请检查任务记录。'],
+  ['Worktree does not belong to this task; cleanup was refused', '无法确认这是该任务的隔离工作区，已停止清理。请检查任务记录。'],
   ['Invalid pending task activation; original data preserved', '待确认的审批或重试记录无效，已保留原始数据。'],
   ['Concurrent runs must be between 1 and 8', '最大并发数必须是 1 到 8 之间的整数。'],
   ['Token limits must be non-negative integers', 'Token 上限必须是非负整数，0 表示不限制。'],
@@ -110,6 +111,7 @@ const messages = new Map([
 ]);
 
 const patterns = [
+  [/^Worktree cleanup failed: ([\s\S]+)$/, error => `隔离工作区清理失败，已保留任务记录。请处理原因后重试：${messageText(error)}`],
   [/^Apply outcome needs verification; use Reconcile apply before continuing: ([\s\S]+)$/, error => `应用结果尚未确认，请点击“核对应用结果”。代码可能已经写入原仓库。详细信息：${error}`],
   [/^Git command timed out after (\d+) ms; inspect the repository before retrying$/, ms => `Git 操作超过 ${Number(ms) / 1000} 秒，已停止。请先检查仓库状态，再决定是否重试。`],
   [/^Git output exceeded (\d+) bytes; no partial result was accepted$/, bytes => `Git 输出超过 ${Number(bytes) / 1024 / 1024} MiB，操作已停止；不会使用不完整的结果。请缩小变更范围后重试。`],
@@ -118,7 +120,7 @@ const patterns = [
   [/^Isolated worktree created on (.+)$/, branch => `已创建隔离工作区，分支：${branch}`],
   [/^Run token budget exceeded \(([^\n]+)\)$/, usage => `单任务 Token 预算已超限（${usage}）`],
   [/^Repository token quota (?:exceeded|reached) \(([^\n]+)\)$/, usage => `仓库累计 Token 配额已用尽（${usage}）`],
-  [/^Changes applied; worktree cleanup failed: ([\s\S]+)$/, error => `变更已应用，但隔离工作区清理失败：${error}`],
+  [/^Changes applied; worktree cleanup failed: ([\s\S]+)$/, error => `变更已应用，但隔离工作区清理失败：${messageText(error)}`],
   [/^(git|codex) executable not found\. Install it or set its absolute path in Environment settings\.(?: Select the native \.exe executable on Windows\.)?$/, tool => `未找到 ${tool} 程序，请先安装或在“环境检查”中填写绝对路径。Windows 请使用原生 .exe 文件。`],
   [/^Cannot execute (git|codex) at ([\s\S]+)$/, (tool, details) => `无法运行 ${tool}，请检查程序路径：${details}`],
   [/^(git|codex) version check failed( \(timed out\))?\. Check this executable in a terminal\.$/, (tool, timeout) => `${tool} 版本检查${timeout ? '超时' : '失败'}，请在终端检查该程序。`],
@@ -142,6 +144,7 @@ const events = new Map([
   ['run.approved','已批准写入'], ['run.awaiting_merge','等待变更审批'], ['run.completed','任务完成'], ['run.failed','任务失败'],
   ['run.cancelled','任务取消'], ['run.discarded','变更丢弃'], ['run.budget_exceeded','预算超限'], ['run.retried','任务重试'],
   ['run.archive','任务归档'], ['run.unarchive','任务恢复'], ['worktree.created','创建隔离工作区'],
+  ['worktree.cleanup_failed','工作区清理失败'],
   ['thread.started','会话开始'], ['turn.started','执行轮次开始'], ['turn.completed','执行轮次完成'], ['turn.failed','执行轮次失败'],
   ['item.started','操作开始'], ['item.updated','操作更新'], ['item.completed','操作完成'], ['response.completed','回复完成'],
   ['error','错误'], ['output','输出'],
