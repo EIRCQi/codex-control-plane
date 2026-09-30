@@ -1,8 +1,7 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell, dialog } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { desktopWindowOptions, trayMenu } from "./lib/desktop.mjs";
-import { selectRunner } from './lib/launcher.mjs';
+import { createDesktopRunner, desktopWindowOptions, trayMenu } from "./lib/desktop.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const iconPath = path.join(root, "build", "icon.png");
@@ -12,11 +11,11 @@ const hasLock = app.requestSingleInstanceLock();
 let window = null;
 let tray = null;
 let quitting = false;
-let shutdownRunner = null;
 let shutdownComplete = false;
+const runner = createDesktopRunner({port:Number(process.env.PORT || 4310)});
 
 function showWindow() {
-  if (!window) return;
+  if (quitting || !window) return;
   window.show();
   if (window.isMinimized()) window.restore();
   window.focus();
@@ -36,13 +35,9 @@ function rebuildTrayMenu() {
 
 async function start() {
   process.env.CODEX_CONTROL_PLANE_DATA_DIR = path.join(app.getPath("userData"), "data");
-  const selected = await selectRunner({port:Number(process.env.PORT || 4310), start:async () => {
-    const {serverReady, shutdown} = await import('./server.mjs');
-    const ready = await serverReady;
-    return {url:ready.url, shutdown};
-  }});
+  const selected = await runner.start();
+  if (!selected || quitting) return;
   url = selected.url;
-  shutdownRunner = selected.shutdown;
   reusedRunner = selected.reused;
   const icon = nativeImage.createFromPath(iconPath);
   window = new BrowserWindow(desktopWindowOptions(icon));
@@ -66,6 +61,7 @@ async function start() {
     if (/^https?:\/\//i.test(target)) void shell.openExternal(target);
   });
   await window.loadURL(url);
+  if (quitting) return;
 
   const trayIcon = icon.resize({ width: process.platform === "darwin" ? 18 : 22, height: process.platform === "darwin" ? 18 : 22 });
   if (process.platform === "darwin") trayIcon.setTemplateImage(true);
@@ -80,17 +76,18 @@ if (!hasLock) {
 } else {
   app.on("second-instance", showWindow);
   app.on("before-quit", (event) => {
-    if (shutdownComplete || !shutdownRunner) { quitting = true; return; }
+    if (shutdownComplete) return;
     event.preventDefault();
     if (quitting) return;
     quitting = true;
-    void shutdownRunner().catch(console.error).finally(() => {
+    void runner.shutdown().catch(console.error).finally(() => {
       shutdownComplete = true;
       app.quit();
     });
   });
   app.on("activate", showWindow);
   app.whenReady().then(start).catch((error) => {
+    if (quitting) return;
     console.error(error);
     dialog.showErrorBox("无法启动 Codex 控制台", error.code === "EADDRINUSE" ? `端口 ${Number(process.env.PORT || 4310)} 已被占用。请先退出原执行器，再打开桌面应用。` : `请检查本地执行器状态。\n\n${error.message}`);
     app.quit();

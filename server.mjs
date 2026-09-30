@@ -851,8 +851,10 @@ if (!process.versions.electron) {
     process.once(signal, () => { void shutdown().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); }); });
   }
 }
-try { await serverReady; }
-catch (error) {
+// Export shutdown before recovery and the initial write finish, so an embedded
+// desktop can cancel startup rather than exiting around owned subprocesses.
+void serverReady.catch(error => {
+  if (stopping) return;
   console.error(startupErrorMessage(error, port));
   process.exitCode = 1;
-}
+});
